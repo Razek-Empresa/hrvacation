@@ -223,6 +223,11 @@ Tabelas criadas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_conf
 
 | Versão | Mudanças |
 |--------|----------|
+| 1.9.0 | Entrada "Afastamentos" também na interface simplificada (self-service), no menu Plugins. |
+| 1.8.1 | Redirecionamento de e-mail por seleção de usuário (em vez de texto digitado). |
+| 1.8.0 | Lista mostra ID/colaborador/início/término; calendário marca apenas início e fim (com tooltip); campo de redirecionamento de e-mail. |
+| 1.7.2 | Correções na aba de permissões do perfil (compatibilidade de assinaturas do GLPI 11). |
+| 1.7.0 | Permissão do plugin editável em Administração › Perfis (aba "Afastamentos"). |
 | 1.6.2 | Ajuste de textos: "mensagem de ausência" no lugar de "mensagem de férias". |
 | 1.6.1 | Ícone alterado para período de ausência (`ti ti-calendar-off`). |
 | 1.6.0 | Renomeado de "férias" para "afastamento"; reordenação dos campos do formulário. |
