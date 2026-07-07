@@ -13,7 +13,7 @@
 use GlpiPlugin\Hrvacation\Period;
 use GlpiPlugin\Hrvacation\Profile;
 
-define('PLUGIN_HRVACATION_VERSION', '1.9.0');
+define('PLUGIN_HRVACATION_VERSION', '2.1.0');
 define('PLUGIN_HRVACATION_MIN_GLPI', '10.0.0');
 
 /**
@@ -30,9 +30,29 @@ function plugin_init_hrvacation()
     Plugin::registerClass(Profile::class, ['addtabon' => 'Profile']);
     $PLUGIN_HOOKS['change_profile']['hrvacation'] = [Profile::class, 'initProfile'];
 
-    // Adiciona a entrada "Afastamentos" no menu da interface simplificada
-    // (self-service), aparecendo em "Plugins".
-    $PLUGIN_HOOKS['redefine_menus']['hrvacation'] = 'plugin_hrvacation_redefine_menus';
+    // Carrega o direito do plugin na sessão ativa.
+    // O GLPI só popula $_SESSION['glpiactiveprofile'] com direitos que estão
+    // registrados no momento do login; plugins instalados depois precisam
+    // injetar o valor manualmente a cada requisição.
+    if (isset($_SESSION['glpiactiveprofile']['id'])) {
+        $profiles_id = (int) $_SESSION['glpiactiveprofile']['id'];
+        if (!isset($_SESSION['glpiactiveprofile']['plugin_hrvacation_period'])) {
+            global $DB;
+            $row = $DB->request([
+                'FROM'  => 'glpi_profilerights',
+                'WHERE' => [
+                    'profiles_id' => $profiles_id,
+                    'name'        => 'plugin_hrvacation_period',
+                ],
+            ])->current();
+            $_SESSION['glpiactiveprofile']['plugin_hrvacation_period'] =
+                $row ? (int) $row['rights'] : 0;
+        }
+    }
+
+    // Adiciona a entrada "Afastamentos" no menu "Plugins" da interface
+    // simplificada (self-service). Hook dedicado a esse fim no GLPI.
+    $PLUGIN_HOOKS['helpdesk_menu_entry']['hrvacation'] = '/front/period.php';
 
     if (Session::getLoginUserID()) {
         // Adiciona a entrada de menu (em "Ferramentas").
@@ -90,33 +110,4 @@ function plugin_hrvacation_check_prerequisites()
 function plugin_hrvacation_check_config($verbose = false)
 {
     return true;
-}
-
-/**
- * Adiciona a entrada "Afastamentos" no menu da interface simplificada
- * (self-service / helpdesk), respeitando a permissão do plugin.
- *
- * @param array $menu Definição atual dos menus.
- * @return array
- */
-function plugin_hrvacation_redefine_menus($menu)
-{
-    if (!is_array($menu)) {
-        return $menu;
-    }
-
-    $is_helpdesk = (($_SESSION['glpiactiveprofile']['interface'] ?? '') === 'helpdesk');
-
-    if ($is_helpdesk
-        && Session::haveRight('plugin_hrvacation_period', READ)
-        && !array_key_exists('hrvacation', $menu)) {
-        $menu['hrvacation'] = [
-            'default' => '/plugins/hrvacation/front/period.php',
-            'title'   => __('Afastamentos', 'hrvacation'),
-            'icon'    => 'ti ti-calendar-off',
-            'content' => [true],
-        ];
-    }
-
-    return $menu;
 }
