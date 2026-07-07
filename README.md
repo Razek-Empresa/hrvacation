@@ -1,14 +1,16 @@
 # Afastamentos / Bloqueio de acessos — Plugin GLPI
 
 Plugin para o **GLPI** onde o RH cadastra **afastamentos** de colaboradores
-(licenças, afastamentos médicos, viagens, etc.) num calendário e, com base nas
-datas, o sistema **abre chamados automaticamente**:
+(licenças, afastamentos médicos, viagens, etc.) e, com base nas datas, o sistema
+**abre chamados automaticamente**:
 
 - um **chamado de bloqueio** dos acessos no início do afastamento;
 - um **chamado de liberação** dos acessos no retorno.
 
-Cada chamado já nasce com **tarefas separadas** (bloquear AD, Sectra, Office 365,
-redirecionar e-mail, etc.), totalmente configuráveis pela interface.
+Suporta afastamentos **fracionados em até 3 períodos**, cada um gerando seu
+próprio par de chamados. Cada chamado já nasce com **tarefas separadas**
+(bloquear AD, Sectra, Office 365, redirecionar e-mail, etc.),
+totalmente configuráveis pela interface.
 
 > Compatível com **GLPI 10.0.x** e **GLPI 11.0.x**.
 
@@ -22,7 +24,9 @@ redirecionar e-mail, etc.), totalmente configuráveis pela interface.
 - [Configuração](#configuração)
 - [Permissões](#permissões)
 - [Uso](#uso)
+- [Fracionado](#fracionado)
 - [Como os chamados são abertos](#como-os-chamados-são-abertos)
+- [Cron automático](#cron-automático)
 - [Cancelamento ao excluir](#cancelamento-ao-excluir)
 - [Estrutura de arquivos](#estrutura-de-arquivos)
 - [Notas técnicas](#notas-técnicas)
@@ -33,16 +37,19 @@ redirecionar e-mail, etc.), totalmente configuráveis pela interface.
 
 ## Recursos
 
-- **Cadastro de afastamentos** (colaborador + data de início + data de término + observações).
-- **Calendário mensal** com quem está afastado em cada dia.
-- **Linha do tempo (Gantt)** com todos os afastamentos da janela, em barras por colaborador, para enxergar sobreposições.
-- **Listagem** com filtros, ordenação e exportação (motor de busca do GLPI).
-- **Abertura automática de chamados** de bloqueio (início) e liberação (retorno).
-- **Tarefas automáticas** por chamado, configuráveis (uma por linha), com lista de bloqueio e o espelho de liberação.
-- **Antecedência configurável** para abrir cada chamado (ex.: liberar acessos 1 dia antes do retorno).
-- **Abertura imediata** ao cadastrar afastamentos de hoje ou retroativos; o cron cuida dos futuros.
+- **Cadastro de afastamentos** com seleção de data de início e quantidade de dias (término calculado automaticamente).
+- **Afastamento fracionado** em até 3 períodos, cada um com datas e chamados independentes.
+- **Calendário mensal** marcando início (verde ▸) e fim (vermelho ◂) de cada afastamento.
+- **Linha do tempo (Gantt)** com barras por colaborador para enxergar sobreposições.
+- **Listagem** com ID, nome do colaborador, início, término e links para os chamados.
+- **Abertura automática de chamados** de bloqueio e liberação por período.
+- **Tarefas configuráveis** por chamado (uma por linha), com lista de bloqueio e espelho de liberação.
+- **Antecedência configurável** para abrir cada chamado.
+- **Abertura imediata** ao cadastrar afastamentos retroativos ou que começam hoje.
+- **Requerente = usuário do RH** que cadastrou o afastamento; colaborador entra como observador.
 - **Cancelamento automático** dos chamados vinculados ao excluir um afastamento.
 - **Categoria, grupo responsável e tipo** dos chamados definidos na configuração.
+- Acesso pela **interface padrão** (Ferramentas) e pela **interface simplificada** (Plug-ins).
 
 ---
 
@@ -57,47 +64,44 @@ redirecionar e-mail, etc.), totalmente configuráveis pela interface.
 
 ## Instalação
 
-1. Copie a pasta `hrvacation` para o diretório de plugins do GLPI
-   (`plugins/` ou `marketplace/`):
+1. Copie a pasta `hrvacation` para `plugins/` ou `marketplace/` do GLPI:
 
    ```
-   <glpi>/plugins/hrvacation/setup.php
+   <glpi>/marketplace/hrvacation/setup.php
    ```
 
-   A pasta `hrvacation` deve ficar direto dentro de `plugins/` (ou `marketplace/`),
-   sem nível extra.
+   A pasta `hrvacation` deve ficar direto dentro de `plugins/` (ou `marketplace/`), sem nível extra.
 
-2. Ajuste o dono dos arquivos para o usuário do servidor web:
+2. Ajuste o dono dos arquivos:
 
    ```bash
    chown -R www-data:www-data <caminho>/hrvacation
    ```
 
-3. No GLPI, vá em **Configurar › Plugins**, localize
-   **Afastamentos / Bloqueio de acessos** e clique em **Instalar** e **Ativar**.
+3. No GLPI, vá em **Configurar › Plugins**, localize **Afastamentos / Bloqueio de acessos**
+   e clique em **Instalar** e **Ativar**.
 
-4. Conceda o direito aos perfis que vão usar o plugin em
-   **Administração › Perfis**. Na instalação, apenas o **Super-Admin** recebe
-   acesso total.
+4. Conceda permissão ao perfil do RH em **Administração › Perfis**
+   (veja a seção [Permissões](#permissões)).
 
 ---
 
 ## Configuração
 
-Acesse a configuração do plugin (engrenagem em **Configurar › Plugins**) e defina:
+Acesse **Configurar › Plugins › engrenagem do Afastamentos**:
 
 | Campo | Função |
 |-------|--------|
-| **Antecedência do chamado de bloqueio (dias)** | Quantos dias antes do início abrir o chamado. `0` = no próprio dia. |
-| **Antecedência do chamado de liberação (dias)** | Quantos dias antes do término abrir o chamado. `0` = no último dia. |
-| **Categoria do chamado de bloqueio** | Categoria ITIL aplicada ao chamado de bloqueio. |
-| **Categoria do chamado de liberação** | Categoria ITIL aplicada ao chamado de liberação. |
+| **Antecedência — bloqueio (dias)** | Quantos dias antes do início abrir o chamado. `0` = no próprio dia. |
+| **Antecedência — liberação (dias)** | Quantos dias antes do término abrir o chamado. |
+| **Categoria do chamado de bloqueio** | Categoria ITIL do chamado de bloqueio. |
+| **Categoria do chamado de liberação** | Categoria ITIL do chamado de liberação. |
 | **Grupo responsável** | Grupo técnico atribuído aos chamados. |
 | **Tipo do chamado** | Incidente ou Requisição (padrão: Requisição). |
-| **Tarefas do chamado de bloqueio** | Uma tarefa por linha. Cada linha vira uma tarefa "a fazer". |
-| **Tarefas do chamado de liberação** | Idem, já pré-preenchido com o espelho do bloqueio. |
+| **Tarefas do chamado de bloqueio** | Uma tarefa por linha — cada linha vira uma tarefa "a fazer". |
+| **Tarefas do chamado de liberação** | Idem, pré-preenchido com o espelho do bloqueio. |
 
-As tarefas padrão de bloqueio:
+Tarefas padrão de bloqueio:
 
 ```
 Bloquear acesso Active Directory
@@ -109,77 +113,104 @@ Configurar mensagem de ausência Office 365
 Redirecionar Email
 ```
 
-E o espelho de liberação (desbloquear / remover redirecionamento, etc.).
-
 ---
 
 ## Permissões
 
-O acesso ao plugin é controlado por um direito próprio, exibido em
-**Administração › Perfis › [perfil] › aba do plugin** (ou na lista de direitos
-do perfil). Sem esse direito marcado, a entrada **Afastamentos** **não aparece**
-no menu Ferramentas para o usuário.
-
-Na instalação, apenas o perfil **Super-Admin** recebe acesso total; todos os
-demais perfis começam sem acesso. Para liberar o uso ao RH (ou a quem for
-operar), edite o perfil correspondente e marque os níveis desejados:
+Acesse **Administração › Perfis › (perfil RH) › aba "Afastamentos"**:
 
 | Nível | O que libera |
 |-------|--------------|
-| **Ler** | Ver a listagem, o calendário, a linha do tempo e abrir afastamentos. |
+| **Ler** | Ver listagem, calendário, linha do tempo e abrir afastamentos. |
 | **Criar** | Cadastrar novos afastamentos. |
 | **Atualizar** | Editar afastamentos existentes. |
-| **Excluir** | Enviar afastamentos para a lixeira (e cancelar os chamados vinculados). |
+| **Excluir** | Enviar para a lixeira (cancela chamados vinculados). |
 | **Purgar** | Excluir definitivamente. |
 
-> A configuração do plugin (categorias, tarefas, antecedências) usa o direito
-> padrão de **configuração** do GLPI, separado do direito de afastamentos.
+> Sem o direito marcado, o menu **Afastamentos** não aparece para o usuário.
+
+> A configuração do plugin usa o direito padrão de **configuração** do GLPI, separado.
+
+> **Interface simplificada:** o plugin aparece em **Plug-ins** para perfis helpdesk.
+> O direito é injetado na sessão a cada requisição, sem necessidade de logout/login.
 
 ---
 
 ## Uso
 
-- Menu **Ferramentas › Afastamentos**.
-- Botões no topo: **Calendário** e **Linha do tempo**.
-- **Cadastrar afastamento:** botão "+ Adicionar", o botão "Cadastrar afastamento"
-  no calendário/linha do tempo, ou clicando num dia do calendário.
-- Na listagem, clique no **ID** para abrir o afastamento.
+- **Interface padrão:** menu **Ferramentas › Afastamentos**.
+- **Interface simplificada:** menu **Plug-ins › Afastamentos / Bloqueio de acessos**.
+- Botões no topo: **+ Adicionar**, **Calendário** e **Linha do tempo**.
+- Na listagem, clique no **ID** ou no **nome do colaborador** para abrir o afastamento.
+
+### Cadastrar um afastamento
+
+1. Clique em **+ Adicionar**.
+2. Selecione o **colaborador**.
+3. Informe a **data de início** e a **quantidade de dias** — o término é calculado automaticamente.
+4. Opcionalmente, informe para quem **redirecionar o e-mail** e **comentários**.
+5. Se necessário, marque **Fracionado** (veja abaixo).
+6. Clique em **Adicionar**.
+
+---
+
+## Fracionado
+
+Marque o checkbox **Fracionado** para revelar mais dois períodos (P2 e P3).
+Cada período tem sua própria data de início e quantidade de dias.
+O término de cada período é calculado automaticamente.
+
+Cada período ativo gera seus **próprios chamados** de bloqueio e liberação
+(até 6 chamados no total). Os títulos dos chamados dos períodos 2 e 3
+ficam com o sufixo **[Período 2]** e **[Período 3]** para fácil identificação.
 
 ---
 
 ## Como os chamados são abertos
 
-A abertura é baseada nas **datas**, não no momento do cadastro (exceto retroativos):
-
-- **Bloqueio:** abre quando o início chega (hoje, dentro da antecedência ou
-  retroativo) e o afastamento ainda não terminou.
+- **Bloqueio:** abre quando o início do período chega (hoje, antecedência ou retroativo)
+  e o afastamento ainda não terminou.
 - **Liberação:** abre quando o término entra na janela de antecedência.
 
 Dois gatilhos trabalham juntos:
 
-1. **Ao cadastrar** — se o afastamento já começou ou começa hoje, o chamado de
-   bloqueio abre na hora do salvamento.
-2. **Tarefa automática diária** (`vacationTickets`) — cuida dos afastamentos
-   futuros, abrindo cada chamado quando a data chega. Roda em **modo GLPI
-   (interno)**, durante o uso normal do sistema.
+1. **Ao cadastrar** — se o afastamento começa hoje ou já começou, o chamado de bloqueio
+   abre imediatamente.
+2. **Tarefa automática diária** (`vacationTickets`) — cuida dos afastamentos futuros.
 
-> Para timing preciso em produção, recomenda-se agendar
-> `php bin/console glpi:cron` no servidor e trocar a tarefa para **modo CLI** em
-> **Configurar › Ações automáticas**. Para testar na hora, use o botão
-> **Executar** nessa mesma tela.
+O **requerente** de cada chamado é o **usuário do RH** que cadastrou o afastamento
+(`users_id_recipient`). O colaborador afastado entra como **observador**.
 
-Cada chamado é criado **uma única vez** — os IDs ficam gravados no afastamento,
-evitando duplicação.
+Cada chamado é criado **uma única vez** — os IDs ficam gravados no afastamento.
+
+---
+
+## Cron automático
+
+A tarefa automática roda em **modo GLPI (interno)** por padrão, mas isso depende
+de acesso ao sistema. Para garantir execução diária em produção, agende no
+crontab do servidor host:
+
+```bash
+crontab -e
+```
+
+Adicione (ajuste o nome do container e o horário):
+
+```
+0 7 * * * docker exec -u www-data SEU_CONTAINER php /var/glpi/bin/console glpi:cron:run >/dev/null 2>&1
+```
+
+Para testar na hora sem esperar o cron, vá em **Configurar › Ações automáticas ›
+vacationTickets › botão "Executar"**.
 
 ---
 
 ## Cancelamento ao excluir
 
-Ao **excluir** um afastamento, os chamados que já tinham sido abertos são
-**cancelados automaticamente** (recebem uma solução com o motivo, indo para o
-status *Solucionado*). Chamados já solucionados/fechados são ignorados. Se o
-afastamento for excluído antes do retorno, o chamado de liberação não chega a
-ser aberto.
+Ao **excluir** um afastamento, todos os chamados vinculados (até 6, nos 3 períodos)
+são **cancelados automaticamente** com a solução "Afastamento cancelado pelo RH",
+movendo-os para *Solucionado*. Chamados já fechados são ignorados.
 
 ---
 
@@ -187,35 +218,33 @@ ser aberto.
 
 ```
 hrvacation/
-├── setup.php                 # registro, init, versão, requisitos
-├── hook.php                  # instalação/desinstalação, tabelas, direitos, cron
+├── setup.php                 # registro, init, versão, injeção de direitos na sessão
+├── hook.php                  # instalação/desinstalação, tabelas, migração, cron
 ├── README.md
 ├── src/
-│   ├── Period.php            # itemtype Afastamento + formulário + calendário + timeline + cron
-│   └── Config.php            # configuração (linha única)
+│   ├── Period.php            # itemtype + formulário + calendário + timeline + cron + fracionado
+│   ├── Config.php            # configuração (linha única)
+│   └── Profile.php           # aba "Afastamentos" no formulário de Perfis
 └── front/
-    ├── period.php            # listagem
+    ├── period.php            # listagem própria com JOIN direto
     ├── period.form.php       # formulário (exibe e processa)
     ├── calendar.php          # calendário mensal
     ├── timeline.php          # linha do tempo (Gantt)
-    └── config.form.php       # página de configuração
+    └── config.form.php       # configuração do plugin
 ```
 
-Tabelas criadas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_configs`.
+Tabelas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_configs`.
 
 ---
 
 ## Notas técnicas
 
-- Segue as convenções do GLPI: classes em `/src` com namespace
-  `GlpiPlugin\Hrvacation` (PSR-4), tabelas `glpi_plugin_hrvacation_*`, sem chaves
-  estrangeiras.
-- Consultas via **query builder** do GLPI (sem SQL cru) e saída HTML escapada —
-  compatível com as mudanças de segurança do GLPI 11.
-- O calendário e a linha do tempo são renderizados em PHP puro, sem dependências
-  de JavaScript externo.
-- A camada `front/` é mantida (suportada pelo GLPI 11 por compatibilidade); pode
-  ser migrada para Controllers no futuro.
+- Segue convenções do GLPI: namespace `GlpiPlugin\Hrvacation` (PSR-4), tabelas `glpi_plugin_hrvacation_*`, sem chaves estrangeiras.
+- Consultas via **query builder** do GLPI; saída HTML escapada (compatível com GLPI 11).
+- A listagem usa **JOIN direto no banco** para garantir exibição do nome do colaborador em todas as interfaces.
+- Calendário e linha do tempo em PHP puro, sem dependências JS externas.
+- Camada `front/` mantida (suportada pelo GLPI 11 por compatibilidade).
+- Direito do plugin injetado na sessão a cada requisição para funcionar na interface simplificada.
 
 ---
 
@@ -223,23 +252,35 @@ Tabelas criadas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_conf
 
 | Versão | Mudanças |
 |--------|----------|
-| 1.9.0 | Entrada "Afastamentos" também na interface simplificada (self-service), no menu Plugins. |
-| 1.8.1 | Redirecionamento de e-mail por seleção de usuário (em vez de texto digitado). |
-| 1.8.0 | Lista mostra ID/colaborador/início/término; calendário marca apenas início e fim (com tooltip); campo de redirecionamento de e-mail. |
-| 1.7.2 | Correções na aba de permissões do perfil (compatibilidade de assinaturas do GLPI 11). |
-| 1.7.0 | Permissão do plugin editável em Administração › Perfis (aba "Afastamentos"). |
-| 1.6.2 | Ajuste de textos: "mensagem de ausência" no lugar de "mensagem de férias". |
-| 1.6.1 | Ícone alterado para período de ausência (`ti ti-calendar-off`). |
-| 1.6.0 | Renomeado de "férias" para "afastamento"; reordenação dos campos do formulário. |
+| 2.1.0 | Dropdown de quantidade de dias (1–200) no lugar da data final; suporte a afastamento fracionado em até 3 períodos com chamados independentes. |
+| 2.0.3 | Listagem própria com JOIN direto no banco, resolvendo exibição do nome do colaborador. |
+| 2.0.2 | Tentativa de exibição via `getSpecificValueToDisplay`. |
+| 2.0.1 | Remoção de `joinparams` para dedução automática do JOIN. |
+| 2.0.0 | Requerente dos chamados = usuário do RH; colaborador entra como observador. |
+| 1.9.9 | Gravação de `users_id_recipient` no cadastro. |
+| 1.9.7 | Barra de navegação no formulário da interface simplificada. |
+| 1.9.5 | Barra de ações (Adicionar / Calendário / Linha do tempo) na listagem simplificada. |
+| 1.9.4 | Correção crítica: direito injetado na sessão a cada requisição. |
+| 1.9.3 | Carregamento do `includes.php` via `GLPI_ROOT`. |
+| 1.9.2 | Correção do contexto de menu `helpdesk` vs `tools`. |
+| 1.9.1 | Troca de `redefine_menus` por `helpdesk_menu_entry`. |
+| 1.9.0 | Entrada "Afastamentos" na interface simplificada (menu Plug-ins). |
+| 1.8.1 | Redirecionamento de e-mail por seleção de usuário. |
+| 1.8.0 | Listagem com colunas padrão; calendário marca apenas início e fim; campo de redirecionamento. |
+| 1.7.2 | Correções na aba de permissões do perfil (GLPI 11). |
+| 1.7.0 | Aba "Afastamentos" em Administração › Perfis. |
+| 1.6.2 | Textos: "mensagem de ausência" em vez de "mensagem de férias". |
+| 1.6.1 | Ícone `ti ti-calendar-off`. |
+| 1.6.0 | Renomeado de "férias" para "afastamento"; reordenação do formulário. |
 | 1.5.1 | Correção do salvamento da configuração ("XML not well formed"). |
-| 1.5.0 | Abertura imediata de afastamentos de hoje/retroativos; cron em modo GLPI; ID clicável na lista. |
+| 1.5.0 | Abertura imediata para retroativos; cron em modo GLPI; ID clicável na lista. |
 | 1.4.1 | Correção de idempotência na atualização (direitos de perfil duplicados). |
-| 1.4.0 | Cancelamento automático dos chamados vinculados ao excluir um afastamento. |
-| 1.3.0 | Tarefas automáticas configuráveis por chamado (bloqueio + espelho de liberação). |
-| 1.2.1 | Correção do roteamento das telas (botões de adicionar/abrir). |
-| 1.2.0 | Visão de linha do tempo (Gantt). |
+| 1.4.0 | Cancelamento automático dos chamados ao excluir um afastamento. |
+| 1.3.0 | Tarefas automáticas configuráveis por chamado. |
+| 1.2.1 | Correção do roteamento das telas. |
+| 1.2.0 | Linha do tempo (Gantt). |
 | 1.1.0 | Compatibilidade com GLPI 11. |
-| 1.0.0 | Versão inicial (GLPI 10): cadastro, calendário e abertura automática de chamados. |
+| 1.0.0 | Versão inicial: cadastro, calendário e abertura automática de chamados. |
 
 ---
 
