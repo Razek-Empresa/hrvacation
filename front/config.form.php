@@ -1,6 +1,10 @@
 <?php
 
-include('../../../inc/includes.php');
+if (defined('GLPI_ROOT')) {
+    include(GLPI_ROOT . '/inc/includes.php');
+} else {
+    include('../../../inc/includes.php');
+}
 
 use GlpiPlugin\Hrvacation\Config;
 

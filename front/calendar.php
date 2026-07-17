@@ -1,15 +1,22 @@
 <?php
 
-include('../../../inc/includes.php');
+if (defined('GLPI_ROOT')) {
+    include(GLPI_ROOT . '/inc/includes.php');
+} else {
+    include('../../../inc/includes.php');
+}
 
 use GlpiPlugin\Hrvacation\Period;
 
 Session::checkRight('plugin_hrvacation_period', READ);
 
+$interface = $_SESSION['glpiactiveprofile']['interface'] ?? 'central';
+$menu_type = ($interface === 'helpdesk') ? 'helpdesk' : 'tools';
+
 Html::header(
     __('Calendário de afastamentos', 'hrvacation'),
     $_SERVER['PHP_SELF'],
-    'tools',
+    $menu_type,
     Period::class
 );
 

@@ -1,180 +1,237 @@
 <?php
 
-namespace GlpiPlugin\Hrvacation;
-
-use CommonDBTM;
-use Dropdown;
-use Group;
-use Html;
-use ITILCategory;
-use Ticket;
-
 /**
- * Configuração do plugin (linha única, id = 1).
+ * Hooks de instalação e desinstalação do plugin.
  */
-class Config extends CommonDBTM
-{
-    public static $rightname = 'config';
 
-    public static function getTypeName($nb = 0)
-    {
-        return __('Afastamentos / Bloqueio de acessos', 'hrvacation');
+use GlpiPlugin\Hrvacation\Config;
+use GlpiPlugin\Hrvacation\Period;
+/**
+ * Instalação: cria tabelas, direitos de perfil, configuração padrão e cron.
+ *
+ * @return boolean
+ */
+function plugin_hrvacation_install()
+{
+    global $DB;
+
+    $charset   = DBConnection::getDefaultCharset();
+    $collation = DBConnection::getDefaultCollation();
+    $sign      = DBConnection::getDefaultPrimaryKeySignOption();
+
+    // --- Tabela de períodos de férias ---------------------------------------
+    if (!$DB->tableExists('glpi_plugin_hrvacation_periods')) {
+        $query = "CREATE TABLE `glpi_plugin_hrvacation_periods` (
+            `id`                   int {$sign} NOT NULL AUTO_INCREMENT,
+            `entities_id`          int {$sign} NOT NULL DEFAULT '0',
+            `is_recursive`         tinyint     NOT NULL DEFAULT '0',
+            `users_id`             int {$sign} NOT NULL DEFAULT '0',
+            `is_fracionado`        tinyint     NOT NULL DEFAULT '0',
+            `date_start`           date                 DEFAULT NULL,
+            `days_count`           smallint    NOT NULL DEFAULT '0',
+            `date_end`             date                 DEFAULT NULL,
+            `block_ticket_id`      int {$sign} NOT NULL DEFAULT '0',
+            `unblock_ticket_id`    int {$sign} NOT NULL DEFAULT '0',
+            `date_start2`          date                 DEFAULT NULL,
+            `days_count2`          smallint    NOT NULL DEFAULT '0',
+            `date_end2`            date                 DEFAULT NULL,
+            `block_ticket_id2`     int {$sign} NOT NULL DEFAULT '0',
+            `unblock_ticket_id2`   int {$sign} NOT NULL DEFAULT '0',
+            `date_start3`          date                 DEFAULT NULL,
+            `days_count3`          smallint    NOT NULL DEFAULT '0',
+            `date_end3`            date                 DEFAULT NULL,
+            `block_ticket_id3`     int {$sign} NOT NULL DEFAULT '0',
+            `unblock_ticket_id3`   int {$sign} NOT NULL DEFAULT '0',
+            `users_id_redirect`    int {$sign} NOT NULL DEFAULT '0',
+            `comment`              text,
+            `is_deleted`           tinyint     NOT NULL DEFAULT '0',
+            `users_id_recipient`   int {$sign} NOT NULL DEFAULT '0',
+            `date_creation`        timestamp   NULL     DEFAULT NULL,
+            `date_mod`             timestamp   NULL     DEFAULT NULL,
+            PRIMARY KEY (`id`),
+            KEY `entities_id` (`entities_id`),
+            KEY `users_id` (`users_id`),
+            KEY `date_start` (`date_start`),
+            KEY `date_end` (`date_end`),
+            KEY `is_deleted` (`is_deleted`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collation} ROW_FORMAT=DYNAMIC;";
+        $DB->doQuery($query);
     }
 
-    /**
-     * Retorna a configuração atual como array (com defaults seguros).
-     *
-     * @return array
-     */
-    public static function getConfig()
-    {
-        $config = new self();
-        if ($config->getFromDB(1)) {
-            return $config->fields;
-        }
-        return [
+    // --- Tabela de configuração (linha única id=1) --------------------------
+    if (!$DB->tableExists('glpi_plugin_hrvacation_configs')) {
+        $query = "CREATE TABLE `glpi_plugin_hrvacation_configs` (
+            `id`                       int {$sign} NOT NULL AUTO_INCREMENT,
+            `block_lead_days`          int         NOT NULL DEFAULT '0',
+            `unblock_lead_days`        int         NOT NULL DEFAULT '0',
+            `itilcategories_id_block`  int {$sign} NOT NULL DEFAULT '0',
+            `itilcategories_id_unblock`int {$sign} NOT NULL DEFAULT '0',
+            `groups_id_assign`         int {$sign} NOT NULL DEFAULT '0',
+            `ticket_type`              int         NOT NULL DEFAULT '2',
+            `block_tasks`              text,
+            `unblock_tasks`            text,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collation} ROW_FORMAT=DYNAMIC;";
+        $DB->doQuery($query);
+
+        $DB->insert('glpi_plugin_hrvacation_configs', [
             'id'                        => 1,
             'block_lead_days'           => 0,
             'unblock_lead_days'         => 0,
             'itilcategories_id_block'   => 0,
             'itilcategories_id_unblock' => 0,
             'groups_id_assign'          => 0,
-            'ticket_type'               => Ticket::DEMAND_TYPE,
-            'block_tasks'               => self::getDefaultBlockTasks(),
-            'unblock_tasks'             => self::getDefaultUnblockTasks(),
-        ];
-    }
-
-    /**
-     * Lista padrão de tarefas do chamado de BLOQUEIO (uma por linha).
-     */
-    public static function getDefaultBlockTasks()
-    {
-        return implode("\n", [
-            'Bloquear acesso Active Directory',
-            'Bloquear acesso sectra Razek',
-            'Bloquear acesso sectra SmartMed',
-            'Bloquear acesso sectra Medfield',
-            'Bloquear acesso Office 365',
-            'Configurar mensagem de ausência Office 365',
-            'Redirecionar Email',
+            'ticket_type'               => 2, // Ticket::DEMAND_TYPE (Requisição)
+            'block_tasks'               => Config::getDefaultBlockTasks(),
+            'unblock_tasks'             => Config::getDefaultUnblockTasks(),
         ]);
     }
 
-    /**
-     * Lista padrão de tarefas do chamado de LIBERAÇÃO (espelho do bloqueio).
-     */
-    public static function getDefaultUnblockTasks()
-    {
-        return implode("\n", [
-            'Desbloquear acesso Active Directory',
-            'Desbloquear acesso sectra Razek',
-            'Desbloquear acesso sectra SmartMed',
-            'Desbloquear acesso sectra Medfield',
-            'Desbloquear acesso Office 365',
-            'Remover mensagem de ausência Office 365',
-            'Remover redirecionamento de Email',
+    // --- Migração de instalações já existentes ------------------------------
+    $migration = new Migration(PLUGIN_HRVACATION_VERSION);
+
+    // Campos existentes anteriores
+    if (!$DB->fieldExists('glpi_plugin_hrvacation_configs', 'block_tasks')) {
+        $migration->addField('glpi_plugin_hrvacation_configs', 'block_tasks', 'text');
+    }
+    if (!$DB->fieldExists('glpi_plugin_hrvacation_configs', 'unblock_tasks')) {
+        $migration->addField('glpi_plugin_hrvacation_configs', 'unblock_tasks', 'text');
+    }
+    if (!$DB->fieldExists('glpi_plugin_hrvacation_periods', 'users_id_redirect')) {
+        $migration->addField('glpi_plugin_hrvacation_periods', 'users_id_redirect',
+            "int {$sign} NOT NULL DEFAULT '0'", ['after' => 'unblock_ticket_id']);
+        $migration->addKey('glpi_plugin_hrvacation_periods', 'users_id_redirect');
+    }
+    if ($DB->fieldExists('glpi_plugin_hrvacation_periods', 'email_redirect')) {
+        $migration->dropField('glpi_plugin_hrvacation_periods', 'email_redirect');
+    }
+
+    // Novos campos: fracionado + períodos 2 e 3
+    $t = 'glpi_plugin_hrvacation_periods';
+    if (!$DB->fieldExists($t, 'is_fracionado')) {
+        $migration->addField($t, 'is_fracionado', "tinyint NOT NULL DEFAULT '0'", ['after' => 'users_id']);
+    }
+    if (!$DB->fieldExists($t, 'days_count')) {
+        $migration->addField($t, 'days_count', "smallint NOT NULL DEFAULT '0'", ['after' => 'date_start']);
+    }
+    foreach ([2, 3] as $n) {
+        if (!$DB->fieldExists($t, "date_start{$n}")) {
+            $migration->addField($t, "date_start{$n}", 'date', ['after' => "unblock_ticket_id"]);
+        }
+        if (!$DB->fieldExists($t, "days_count{$n}")) {
+            $migration->addField($t, "days_count{$n}", "smallint NOT NULL DEFAULT '0'", ['after' => "date_start{$n}"]);
+        }
+        if (!$DB->fieldExists($t, "date_end{$n}")) {
+            $migration->addField($t, "date_end{$n}", 'date', ['after' => "days_count{$n}"]);
+        }
+        if (!$DB->fieldExists($t, "block_ticket_id{$n}")) {
+            $migration->addField($t, "block_ticket_id{$n}", "int {$sign} NOT NULL DEFAULT '0'", ['after' => "date_end{$n}"]);
+        }
+        if (!$DB->fieldExists($t, "unblock_ticket_id{$n}")) {
+            $migration->addField($t, "unblock_ticket_id{$n}", "int {$sign} NOT NULL DEFAULT '0'", ['after' => "block_ticket_id{$n}"]);
+        }
+    }
+    $migration->executeMigration();
+
+    // --- Preferências de exibição (colunas padrão da listagem) --------------
+    // Remove todas as preferências (globais e pessoais) para forçar o padrão
+    // correto com ID, Colaborador, Início e Término.
+    $DB->delete('glpi_displaypreferences', ['itemtype' => Period::class]);
+    foreach ([2 => 1, 3 => 2, 4 => 3] as $num => $rank) {
+        $dp = new DisplayPreference();
+        $dp->add([
+            'itemtype' => Period::class,
+            'num'      => $num,
+            'rank'     => $rank,
+            'users_id' => 0,
         ]);
     }
 
-    /**
-     * Formulário de configuração.
-     */
-    public function showConfigForm()
-    {
-        $this->getFromDB(1);
-        $f = $this->fields;
-
-        echo "<form method='post' action='/plugins/hrvacation/front/config.form.php'>";
-        echo "<table class='tab_cadre_fixe'>";
-        echo "<tr><th colspan='2'>" . self::getTypeName() . "</th></tr>";
-
-        echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Antecedência para o chamado de BLOQUEIO (dias)', 'hrvacation') . "</td>";
-        echo "<td>";
-        Dropdown::showNumber('block_lead_days', [
-            'value' => $f['block_lead_days'],
-            'min'   => 0,
-            'max'   => 30,
-        ]);
-        echo "<br><i class='text-muted'>" .
-            __('0 = abre no próprio dia de início do afastamento. 1 = abre 1 dia antes, etc.', 'hrvacation') .
-            "</i></td></tr>";
-
-        echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Antecedência para o chamado de LIBERAÇÃO (dias)', 'hrvacation') . "</td>";
-        echo "<td>";
-        Dropdown::showNumber('unblock_lead_days', [
-            'value' => $f['unblock_lead_days'],
-            'min'   => 0,
-            'max'   => 30,
-        ]);
-        echo "<br><i class='text-muted'>" .
-            __('Contado a partir do último dia do afastamento (término).', 'hrvacation') .
-            "</i></td></tr>";
-
-        echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Categoria do chamado de bloqueio', 'hrvacation') . "</td>";
-        echo "<td>";
-        ITILCategory::dropdown([
-            'name'  => 'itilcategories_id_block',
-            'value' => $f['itilcategories_id_block'],
-        ]);
-        echo "</td></tr>";
-
-        echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Categoria do chamado de liberação', 'hrvacation') . "</td>";
-        echo "<td>";
-        ITILCategory::dropdown([
-            'name'  => 'itilcategories_id_unblock',
-            'value' => $f['itilcategories_id_unblock'],
-        ]);
-        echo "</td></tr>";
-
-        echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Grupo responsável pelos chamados', 'hrvacation') . "</td>";
-        echo "<td>";
-        Group::dropdown([
-            'name'      => 'groups_id_assign',
-            'value'     => $f['groups_id_assign'],
-            'condition' => ['is_assign' => 1],
-        ]);
-        echo "</td></tr>";
-
-        echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Tipo do chamado', 'hrvacation') . "</td>";
-        echo "<td>";
-        Ticket::dropdownType('ticket_type', ['value' => $f['ticket_type']]);
-        echo "</td></tr>";
-
-        echo "<tr><th colspan='2'>" .
-            __('Tarefas geradas automaticamente em cada chamado (uma por linha)', 'hrvacation') .
-            "</th></tr>";
-
-        echo "<tr class='tab_bg_1'>";
-        echo "<td style='vertical-align:top;'>" . __('Tarefas do chamado de BLOQUEIO', 'hrvacation') . "</td>";
-        echo "<td>";
-        echo "<textarea name='block_tasks' rows='8' class='form-control' style='width:100%;font-family:monospace;'>" .
-            Html::cleanInputText($f['block_tasks'] ?? '') . "</textarea>";
-        echo "</td></tr>";
-
-        echo "<tr class='tab_bg_1'>";
-        echo "<td style='vertical-align:top;'>" . __('Tarefas do chamado de LIBERAÇÃO', 'hrvacation') . "</td>";
-        echo "<td>";
-        echo "<textarea name='unblock_tasks' rows='8' class='form-control' style='width:100%;font-family:monospace;'>" .
-            Html::cleanInputText($f['unblock_tasks'] ?? '') . "</textarea>";
-        echo "<br><i class='text-muted'>" .
-            __('Cada linha vira uma tarefa separada (a fazer) no chamado, sem responsável definido.', 'hrvacation') .
-            "</i>";
-        echo "</td></tr>";
-
-        echo "<tr class='tab_bg_2'>";
-        echo "<td colspan='2' style='text-align:center;'>";
-        echo Html::hidden('id', ['value' => 1]);
-        echo Html::submit(_x('button', 'Save'), ['name' => 'update', 'class' => 'btn btn-primary']);
-        echo "</td></tr>";
-
-        echo "</table>";
-        Html::closeForm();
+    // Preenche os valores padrão de tarefas se ainda estiverem vazios.
+    $cfg = new Config();
+    if ($cfg->getFromDB(1)) {
+        $toset = [];
+        if (empty($cfg->fields['block_tasks'])) {
+            $toset['block_tasks'] = Config::getDefaultBlockTasks();
+        }
+        if (empty($cfg->fields['unblock_tasks'])) {
+            $toset['unblock_tasks'] = Config::getDefaultUnblockTasks();
+        }
+        if (!empty($toset)) {
+            $toset['id'] = 1;
+            $cfg->update($toset);
+        }
     }
+
+    // --- Direitos de perfil (idempotente) -----------------------------------
+    // Só cria o direito se ele ainda não existir, evitando "Duplicate entry"
+    // quando o install roda de novo durante uma atualização.
+    $right_exists = (int) ($DB->request([
+        'COUNT' => 'cpt',
+        'FROM'  => 'glpi_profilerights',
+        'WHERE' => ['name' => 'plugin_hrvacation_period'],
+    ])->current()['cpt'] ?? 0);
+
+    if ($right_exists === 0) {
+        // Adiciona o direito a TODOS os perfis com valor 0 (ninguém vê por padrão)...
+        ProfileRight::addProfileRights(['plugin_hrvacation_period']);
+        // ...e concede acesso total ao perfil Super-Admin (id 4) para começar.
+        $DB->update(
+            'glpi_profilerights',
+            ['rights' => ALLSTANDARDRIGHT],
+            [
+                'name'        => 'plugin_hrvacation_period',
+                'profiles_id' => 4,
+            ]
+        );
+    }
+
+    // --- Tarefa automática (cron) -------------------------------------------
+    // Modo INTERNAL (GLPI): roda durante o uso normal do sistema, sem precisar
+    // de crontab. Para timing preciso em produção, recomenda-se trocar para
+    // modo CLI em Configurar > Ações automáticas e agendar bin/console glpi:cron.
+    CronTask::Register(
+        Period::class,
+        'vacationTickets',
+        DAY_TIMESTAMP,
+        [
+            'comment' => 'Abre chamados de bloqueio/liberação de acessos conforme as férias cadastradas',
+            'mode'    => CronTask::MODE_INTERNAL,
+            'state'   => CronTask::STATE_WAITING,
+        ]
+    );
+
+    return true;
+}
+
+/**
+ * Desinstalação: remove tabelas, direitos e cron.
+ *
+ * @return boolean
+ */
+function plugin_hrvacation_uninstall()
+{
+    global $DB;
+
+    foreach (['glpi_plugin_hrvacation_periods', 'glpi_plugin_hrvacation_configs'] as $table) {
+        if ($DB->tableExists($table)) {
+            $DB->doQuery("DROP TABLE `$table`");
+        }
+    }
+
+    // Remove a tarefa automática.
+    $cron = new CronTask();
+    $cron->deleteByCriteria(['itemtype' => Period::class]);
+
+    // Remove as preferências de exibição da listagem.
+    $DB->delete('glpi_displaypreferences', ['itemtype' => Period::class]);
+
+    // Remove os direitos dos perfis.
+    if (method_exists('ProfileRight', 'deleteProfileRights')) {
+        ProfileRight::deleteProfileRights(['plugin_hrvacation_period']);
+    } else {
+        $DB->delete('glpi_profilerights', ['name' => 'plugin_hrvacation_period']);
+    }
+
+    return true;
 }

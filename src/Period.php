@@ -90,7 +90,173 @@ class Period extends CommonDBTM
         return $menu;
     }
 
+    // ----------------------------------------------------------------- LIST
+
+    /**
+     * Listagem simples dos afastamentos com JOIN direto no banco.
+     * Usado no lugar do Search::show() para garantir que o nome do
+     * colaborador seja exibido corretamente em qualquer interface.
+     */
+    public static function showList()
+    {
+        global $DB;
+
+        $canedit   = Session::haveRight(self::$rightname, UPDATE);
+        $cancreate = Session::haveRight(self::$rightname, CREATE);
+        $base      = self::getFormURL(false);
+
+        $iterator = $DB->request([
+            'SELECT'    => [
+                'p.id',
+                'p.users_id',
+                'p.date_start',
+                'p.date_end',
+                'p.block_ticket_id',
+                'p.unblock_ticket_id',
+                'p.entities_id',
+                'u.name        AS user_name',
+                'u.firstname   AS user_firstname',
+                'u.realname    AS user_realname',
+            ],
+            'FROM'      => self::getTable() . ' AS p',
+            'LEFT JOIN' => [
+                User::getTable() . ' AS u' => ['FKEY' => ['p' => 'users_id', 'u' => 'id']],
+            ],
+            'WHERE'     => ['p.is_deleted' => 0]
+                + getEntitiesRestrictCriteria('p'),
+            'ORDER'     => ['p.date_start DESC'],
+        ]);
+
+        echo "<div class='container-fluid'>";
+        echo "<div style='margin:16px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;'>";
+        echo "<h2 style='margin:0;font-size:16px;'>" . self::getTypeName(2) . "</h2>";
+        if ($cancreate) {
+            echo "<a href='" . htmlspecialchars($base) . "?id=-1' class='btn btn-primary'>"
+                . "<i class='ti ti-plus'></i> " . __('Adicionar', 'hrvacation') . "</a>";
+        }
+        echo "</div>";
+
+        echo "<table class='tab_cadre_fixehov'>";
+        echo "<thead><tr>";
+        echo "<th>" . __('ID') . "</th>";
+        echo "<th>" . User::getTypeName(1) . "</th>";
+        echo "<th>" . __('Início do afastamento', 'hrvacation') . "</th>";
+        echo "<th>" . __('Término do afastamento', 'hrvacation') . "</th>";
+        echo "<th>" . __('Chamado de bloqueio', 'hrvacation') . "</th>";
+        echo "<th>" . __('Chamado de liberação', 'hrvacation') . "</th>";
+        echo "</tr></thead><tbody>";
+
+        $i = 0;
+        foreach ($iterator as $row) {
+            $rowclass = ($i % 2) ? 'tab_bg_2' : 'tab_bg_1';
+            $url      = htmlspecialchars($base . '?id=' . (int) $row['id']);
+
+            $firstname = trim($row['user_firstname'] ?? '');
+            $realname  = trim($row['user_realname'] ?? '');
+            $username  = ($firstname || $realname)
+                ? trim("$firstname $realname")
+                : ($row['user_name'] ?? ('#' . $row['users_id']));
+
+            echo "<tr class='$rowclass'>";
+            echo "<td><a href='$url'>" . (int) $row['id'] . "</a></td>";
+            echo "<td><a href='$url'>" . htmlspecialchars($username) . "</a></td>";
+            echo "<td>" . Html::convDate($row['date_start']) . "</td>";
+            echo "<td>" . Html::convDate($row['date_end']) . "</td>";
+            echo "<td>" . self::getTicketLink($row['block_ticket_id']) . "</td>";
+            echo "<td>" . self::getTicketLink($row['unblock_ticket_id']) . "</td>";
+            echo "</tr>";
+            $i++;
+        }
+
+        if ($i === 0) {
+            echo "<tr><td colspan='6' style='text-align:center;padding:20px;color:#888;'>"
+                . __('Nenhum resultado encontrado') . "</td></tr>";
+        }
+
+        echo "</tbody></table></div>";
+    }
+
     // ------------------------------------------------------------------ FORM
+
+    /**
+     * Renderiza valores de campos 'specific' na listagem.
+     * Usado para exibir o nome do colaborador sem depender do motor de JOIN.
+     */
+    public static function getSpecificValueToDisplay($field, $values, array $options = [])
+    {
+        if (!is_array($values)) {
+            $values = [$field => $values];
+        }
+
+        switch ($field) {
+            case 'users_id':
+                $uid = (int) ($values[$field] ?? 0);
+                if ($uid <= 0) {
+                    return '';
+                }
+                $user = new User();
+                if (!$user->getFromDB($uid)) {
+                    return $uid;
+                }
+                $firstname = trim($user->fields['firstname'] ?? '');
+                $realname  = trim($user->fields['realname'] ?? '');
+                $name      = $user->fields['name'] ?? '';
+                if ($firstname || $realname) {
+                    return trim("$firstname $realname");
+                }
+                return $name;
+        }
+
+        return parent::getSpecificValueToDisplay($field, $values, $options);
+    }
+
+    /**
+     * Renderiza o campo 'specific' no formulário de busca.
+     */
+    public static function getSpecificValueToSelect($field, $name = '', $values = '', array $options = [])
+    {
+        if ($field === 'users_id') {
+            return User::dropdown([
+                'name'   => $name,
+                'value'  => $values,
+                'right'  => 'all',
+                'display' => false,
+            ]);
+        }
+        return parent::getSpecificValueToSelect($field, $name, $values, $options);
+    }
+
+    /**
+     * Retorna um <select> com 1..200 dias para o campo informado.
+     */
+    public static function daysDropdown($name, $selected = 0)
+    {
+        $out = "<select name='" . htmlspecialchars($name) . "' class='form-select'>";
+        $out .= "<option value='0'>" . __('Selecione', 'hrvacation') . "</option>";
+        for ($i = 1; $i <= 200; $i++) {
+            $sel = ($selected === $i) ? " selected" : "";
+            $out .= "<option value='{$i}'{$sel}>{$i} " . __('dia(s)', 'hrvacation') . "</option>";
+        }
+        $out .= "</select>";
+        return $out;
+    }
+
+    /**
+     * Calcula date_end a partir de date_start + days_count (dias corridos).
+     * date_end = date_start + (days_count - 1) dias.
+     */
+    protected static function calcDateEnd($date_start, $days_count)
+    {
+        $days = (int) $days_count;
+        if (empty($date_start) || $days <= 0) {
+            return null;
+        }
+        $ts = strtotime($date_start);
+        if (!$ts) {
+            return null;
+        }
+        return date('Y-m-d', strtotime('+' . ($days - 1) . ' days', $ts));
+    }
 
     /**
      * Validação/normalização ao criar.
@@ -100,7 +266,10 @@ class Period extends CommonDBTM
         if (empty($input['entities_id'])) {
             $input['entities_id'] = $_SESSION['glpiactive_entity'] ?? 0;
         }
-        return $this->prepareCommon($input);
+        if (empty($input['users_id_recipient'])) {
+            $input['users_id_recipient'] = (int) Session::getLoginUserID();
+        }
+        return $this->prepareCommon($input, true);
     }
 
     /**
@@ -108,24 +277,106 @@ class Period extends CommonDBTM
      */
     public function prepareInputForUpdate($input)
     {
-        return $this->prepareCommon($input);
+        return $this->prepareCommon($input, false);
     }
 
     /**
-     * Regras comuns de validação das datas.
+     * Regras comuns: calcula date_end dos períodos e valida datas.
      */
-    protected function prepareCommon($input)
+    protected function prepareCommon($input, $is_add = false)
     {
-        if (isset($input['date_start'], $input['date_end'])
-            && !empty($input['date_start']) && !empty($input['date_end'])
-            && $input['date_end'] < $input['date_start']) {
-            Session::addMessageAfterRedirect(
-                __('A data de término deve ser igual ou posterior à data de início.', 'hrvacation'),
-                false,
-                ERROR
+        if ($is_add) {
+            // Normaliza is_fracionado
+            $input['is_fracionado'] = empty($input['is_fracionado']) ? 0 : 1;
+
+            // Período 1
+            $input['date_end'] = self::calcDateEnd(
+                $input['date_start'] ?? '',
+                $input['days_count'] ?? 0
             );
-            return false;
+
+            // Períodos 2 e 3 (só se fracionado)
+            foreach ([2, 3] as $n) {
+                if ($input['is_fracionado']
+                    && !empty($input["date_start{$n}"])
+                    && !empty($input["days_count{$n}"])) {
+                    $input["date_end{$n}"] = self::calcDateEnd(
+                        $input["date_start{$n}"],
+                        $input["days_count{$n}"]
+                    );
+                } else {
+                    $input["date_start{$n}"] = null;
+                    $input["days_count{$n}"] = 0;
+                    $input["date_end{$n}"]   = null;
+                }
+            }
+
+            // Validação básica
+            if (empty($input['date_start']) || empty($input['date_end'])) {
+                Session::addMessageAfterRedirect(
+                    __('Informe a data de início e a quantidade de dias.', 'hrvacation'),
+                    false, ERROR
+                );
+                return false;
+            }
+        } else {
+            // Para atualização (update)
+            // Certifica-se de que fields está populado
+            $fields = $this->fields;
+            if ((empty($fields) || !isset($fields['id'])) && isset($input['id'])) {
+                $this->getFromDB($input['id']);
+                $fields = $this->fields;
+            }
+
+            // Apenas tratamos is_fracionado se ele foi enviado no input (ex: pelo formulário)
+            if (isset($input['is_fracionado'])) {
+                $input['is_fracionado'] = empty($input['is_fracionado']) ? 0 : 1;
+            }
+
+            // Recarrega valores atuais da DB se necessário para cálculo de término do P1
+            if (isset($input['date_start']) || isset($input['days_count'])) {
+                $current_start = isset($input['date_start']) ? $input['date_start'] : ($fields['date_start'] ?? '');
+                $current_days  = isset($input['days_count']) ? $input['days_count'] : ($fields['days_count'] ?? 0);
+                
+                $input['date_end'] = self::calcDateEnd($current_start, $current_days);
+
+                if (empty($current_start) || empty($input['date_end'])) {
+                    Session::addMessageAfterRedirect(
+                        __('Informe a data de início e a quantidade de dias.', 'hrvacation'),
+                        false, ERROR
+                    );
+                    return false;
+                }
+            }
+
+            // Trata P2 e P3 somente se is_fracionado ou as datas/dias correspondentes foram enviados
+            $check_fracionado = isset($input['is_fracionado']) ? $input['is_fracionado'] : ($fields['is_fracionado'] ?? 0);
+            
+            foreach ([2, 3] as $n) {
+                if (isset($input["date_start{$n}"]) || isset($input["days_count{$n}"]) || isset($input['is_fracionado'])) {
+                    if ($check_fracionado) {
+                        $p_start = isset($input["date_start{$n}"]) ? $input["date_start{$n}"] : ($fields["date_start{$n}"] ?? '');
+                        $p_days  = isset($input["days_count{$n}"]) ? $input["days_count{$n}"] : ($fields["days_count{$n}"] ?? 0);
+                        
+                        if (!empty($p_start) && !empty($p_days)) {
+                            $input["date_end{$n}"] = self::calcDateEnd($p_start, $p_days);
+                        } else {
+                            if (isset($input["date_start{$n}"]) || isset($input["days_count{$n}"])) {
+                                $input["date_start{$n}"] = null;
+                                $input["days_count{$n}"] = 0;
+                                $input["date_end{$n}"]   = null;
+                            }
+                        }
+                    } else {
+                        // Se não for fracionado, garante que zera P2 e P3
+                        $input["date_start{$n}"] = null;
+                        $input["days_count{$n}"] = 0;
+                        $input["date_end{$n}"]   = null;
+                    }
+                }
+            }
         }
+
         return $input;
     }
 
@@ -137,56 +388,127 @@ class Period extends CommonDBTM
         $this->initForm($ID, $options);
         $this->showFormHeader($options);
 
-        echo "<tr class='tab_bg_1'>";
-        echo "<td>" . User::getTypeName(1) . " <span class='red'>*</span></td>";
-        echo "<td>";
-        User::dropdown([
-            'name'   => 'users_id',
-            'value'  => $this->fields['users_id'],
-            'right'  => 'all',
-            'entity' => $this->fields['entities_id'],
-        ]);
-        echo "</td>";
-        echo "<td>" . __('Redirecionar e-mail para', 'hrvacation') . "</td>";
-        echo "<td>";
-        User::dropdown([
-            'name'                => 'users_id_redirect',
-            'value'               => $this->fields['users_id_redirect'] ?? 0,
-            'right'               => 'all',
-            'entity'              => $this->fields['entities_id'],
-            'display_emptychoice' => true,
-        ]);
-        echo "</td>";
-        echo "</tr>";
+        $fracionado = (int) ($this->fields['is_fracionado'] ?? 0);
 
+        // ---- Linha 1: Usuário + Redirecionar e-mail ----
         echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Início do afastamento', 'hrvacation') . " <span class='red'>*</span></td>";
-        echo "<td>";
-        Html::showDateField('date_start', ['value' => $this->fields['date_start']]);
-        echo "</td>";
-        echo "<td>" . __('Término do afastamento', 'hrvacation') . " <span class='red'>*</span></td>";
-        echo "<td>";
-        Html::showDateField('date_end', ['value' => $this->fields['date_end']]);
-        echo "</td>";
-        echo "</tr>";
+        echo "<td>" . User::getTypeName(1) . " <span class='red'>*</span></td><td>";
+        User::dropdown(['name' => 'users_id', 'value' => $this->fields['users_id'],
+            'right' => 'all', 'entity' => $this->fields['entities_id']]);
+        echo "</td><td>" . __('Redirecionar e-mail para', 'hrvacation') . "</td><td>";
+        User::dropdown(['name' => 'users_id_redirect',
+            'value' => $this->fields['users_id_redirect'] ?? 0,
+            'right' => 'all', 'entity' => $this->fields['entities_id'],
+            'display_emptychoice' => true]);
+        echo "</td></tr>";
 
+        // ---- Linha 2: Período 1 — início + dias ----
         echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Comentários') . "</td>";
-        echo "<td colspan='3'>";
-        echo "<textarea class='form-control' name='comment' rows='3' style='width:100%;'>" .
-            Html::cleanInputText($this->fields['comment'] ?? '') . "</textarea>";
-        echo "</td>";
-        echo "</tr>";
+        echo "<td>" . __('Início do afastamento', 'hrvacation') . " <span class='red'>*</span></td><td>";
+        Html::showDateField('date_start', ['value' => $this->fields['date_start'] ?? '']);
+        echo "</td><td>" . __('Quantidade de dias', 'hrvacation') . " <span class='red'>*</span></td><td>";
+        echo self::daysDropdown('days_count', (int) ($this->fields['days_count'] ?? 0));
+        echo "</td></tr>";
 
-        // Mostra os chamados já gerados (somente leitura).
+        // ---- Linha 3: término calculado + checkbox fracionado ----
         echo "<tr class='tab_bg_1'>";
-        echo "<td>" . __('Chamado de bloqueio', 'hrvacation') . "</td>";
+        echo "<td>" . __('Término calculado', 'hrvacation') . "</td><td>";
+        echo "<span id='date_end_display' style='color:#374151;font-weight:600;'>";
+        echo !empty($this->fields['date_end'])
+            ? Html::convDate($this->fields['date_end'])
+            : '<em style="color:#9ca3af;">' . __('Selecione início e dias', 'hrvacation') . '</em>';
+        echo "</span></td>";
+        echo "<td><label style='display:flex;align-items:center;gap:8px;cursor:pointer;'>";
+        echo "<input type='checkbox' name='is_fracionado' value='1' id='chk_fracionado'"
+            . ($fracionado ? ' checked' : '') . " style='width:18px;height:18px;'>";
+        echo "<strong>" . __('Fracionado', 'hrvacation') . "</strong></label>";
+        echo "<div style='font-size:11px;color:#6b7280;margin-top:2px;'>"
+            . __('Até 3 períodos', 'hrvacation') . "</div></td><td></td></tr>";
+
+        // ---- Períodos 2 e 3 ----
+        foreach ([2, 3] as $n) {
+            $disp = $fracionado ? '' : 'none';
+            echo "<tr class='tab_bg_2 periodo_fracionado' id='periodo{$n}a' style='display:{$disp};'>";
+            echo "<td>" . sprintf(__('Início — Período %d', 'hrvacation'), $n)
+                . " <span class='red'>*</span></td><td>";
+            Html::showDateField("date_start{$n}", ['value' => $this->fields["date_start{$n}"] ?? '']);
+            echo "</td><td>" . sprintf(__('Qtd. dias — Período %d', 'hrvacation'), $n)
+                . " <span class='red'>*</span></td><td>";
+            echo self::daysDropdown("days_count{$n}", (int) ($this->fields["days_count{$n}"] ?? 0));
+            echo "</td></tr>";
+
+            echo "<tr class='tab_bg_2 periodo_fracionado' id='periodo{$n}b' style='display:{$disp};'>";
+            echo "<td>" . sprintf(__('Término calc. — P%d', 'hrvacation'), $n) . "</td><td>";
+            echo "<span id='date_end_display{$n}' style='color:#374151;font-weight:600;'>";
+            echo !empty($this->fields["date_end{$n}"])
+                ? Html::convDate($this->fields["date_end{$n}"])
+                : '<em style="color:#9ca3af;">' . __('Selecione início e dias', 'hrvacation') . '</em>';
+            echo "</span></td>";
+            echo "<td>" . __('Chamado bloqueio', 'hrvacation') . " P{$n}:</td><td>";
+            echo self::getTicketLink($this->fields["block_ticket_id{$n}"] ?? 0) . ' &nbsp; '
+                . __('Liberação', 'hrvacation') . " P{$n}: "
+                . self::getTicketLink($this->fields["unblock_ticket_id{$n}"] ?? 0);
+            echo "</td></tr>";
+        }
+
+        // ---- Comentários ----
+        echo "<tr class='tab_bg_1'><td>" . __('Comentários') . "</td><td colspan='3'>";
+        echo "<textarea class='form-control' name='comment' rows='3' style='width:100%;'>"
+            . Html::cleanInputText($this->fields['comment'] ?? '') . "</textarea>";
+        echo "</td></tr>";
+
+        // ---- Chamados período 1 ----
+        echo "<tr class='tab_bg_1'>";
+        echo "<td>" . __('Chamado de bloqueio', 'hrvacation') . " (P1)</td>";
         echo "<td>" . self::getTicketLink($this->fields['block_ticket_id']) . "</td>";
-        echo "<td>" . __('Chamado de liberação', 'hrvacation') . "</td>";
+        echo "<td>" . __('Chamado de liberação', 'hrvacation') . " (P1)</td>";
         echo "<td>" . self::getTicketLink($this->fields['unblock_ticket_id']) . "</td>";
         echo "</tr>";
 
         $this->showFormButtons($options);
+
+        // JS: calcula término e controla fracionado
+        echo "<script>
+(function(){
+    function addDays(dateStr, days) {
+        if (!dateStr || !days || parseInt(days) <= 0) return '';
+        var p = dateStr.split('-');
+        if (p.length !== 3) return '';
+        var d = new Date(p[0], p[1]-1, p[2]);
+        d.setDate(d.getDate() + parseInt(days) - 1);
+        return String(d.getDate()).padStart(2,'0') + '/'
+             + String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear();
+    }
+    function updateEnd(sName, dName, dispId) {
+        var s = document.querySelector('[name=\"' + sName + '\"]');
+        var d = document.querySelector('[name=\"' + dName + '\"]');
+        var el = document.getElementById(dispId);
+        if (!s || !d || !el) return;
+        var r = addDays(s.value, d.value);
+        el.innerHTML = r ? '<strong>' + r + '</strong>'
+            : '<em style=\"color:#9ca3af\">" . addslashes(__('Selecione início e dias', 'hrvacation')) . "</em>';
+    }
+    function bind(sName, dName, dispId) {
+        ['change','input'].forEach(function(ev){
+            var s = document.querySelector('[name=\"' + sName + '\"]');
+            var d = document.querySelector('[name=\"' + dName + '\"]');
+            if (s) s.addEventListener(ev, function(){ updateEnd(sName, dName, dispId); });
+            if (d) d.addEventListener(ev, function(){ updateEnd(sName, dName, dispId); });
+        });
+    }
+    bind('date_start', 'days_count', 'date_end_display');
+    bind('date_start2', 'days_count2', 'date_end_display2');
+    bind('date_start3', 'days_count3', 'date_end_display3');
+
+    var chk = document.getElementById('chk_fracionado');
+    function toggleFracionado() {
+        document.querySelectorAll('.periodo_fracionado').forEach(function(r){
+            r.style.display = chk.checked ? '' : 'none';
+        });
+    }
+    if (chk) { chk.addEventListener('change', toggleFracionado); }
+})();
+</script>";
         return true;
     }
 
@@ -220,19 +542,21 @@ class Period extends CommonDBTM
         $opts[] = ['id' => 'common', 'name' => self::getTypeName(2)];
 
         $opts[] = [
-            'id'    => '1',
-            'table' => self::getTable(),
-            'field' => 'id',
-            'name'  => __('ID'),
+            'id'            => '1',
+            'table'         => self::getTable(),
+            'field'         => 'id',
+            'name'          => __('ID'),
             'datatype'      => 'itemlink',
             'massiveaction' => false,
         ];
         $opts[] = [
-            'id'       => '2',
-            'table'    => User::getTable(),
-            'field'    => 'name',
-            'name'     => User::getTypeName(1),
-            'datatype' => 'dropdown',
+            'id'            => '2',
+            'table'         => self::getTable(),
+            'field'         => 'users_id',
+            'name'          => User::getTypeName(1),
+            'datatype'      => 'specific',
+            'massiveaction' => false,
+            'searchtype'    => ['equals', 'notequals'],
         ];
         $opts[] = [
             'id'       => '3',
@@ -330,14 +654,18 @@ class Period extends CommonDBTM
         $config = Config::getConfig();
         $count  = 0;
 
-        // Períodos não excluídos que ainda têm algum chamado pendente.
+        // Períodos não excluídos que ainda têm algum chamado pendente (qualquer período).
         $iterator = $DB->request([
             'FROM'  => self::getTable(),
             'WHERE' => [
                 'is_deleted' => 0,
                 'OR'         => [
-                    ['block_ticket_id'   => 0],
-                    ['unblock_ticket_id' => 0],
+                    ['block_ticket_id'    => 0],
+                    ['unblock_ticket_id'  => 0],
+                    ['block_ticket_id2'   => 0],
+                    ['unblock_ticket_id2' => 0],
+                    ['block_ticket_id3'   => 0],
+                    ['unblock_ticket_id3' => 0],
                 ],
             ],
         ]);
@@ -354,19 +682,8 @@ class Period extends CommonDBTM
     }
 
     /**
-     * Avalia UM período e abre os chamados que já estão "vencidos" (na hora),
-     * gravando os IDs no próprio período. Reaproveitado pelo cron e pela
-     * abertura imediata no cadastro.
-     *
-     * Regras (com base na data de HOJE):
-     *  - Bloqueio: abre se o início já chegou (hoje, antecedência ou retroativo)
-     *    e o período ainda não terminou.
-     *  - Liberação: abre se o término já está dentro da janela de antecedência
-     *    (piso de 30 dias para não criar para férias muito antigas).
-     *
-     * @param array $row    Linha do período (campos).
-     * @param array $config Configuração do plugin.
-     * @return integer Quantidade de chamados abertos (0, 1 ou 2).
+     * Avalia UM registro e abre os chamados de todos os períodos ativos,
+     * respeitando antecedências e janelas. Suporta até 3 períodos (fracionado).
      */
     protected static function processDue(array $row, array $config)
     {
@@ -379,28 +696,55 @@ class Period extends CommonDBTM
 
         $count = 0;
 
-        // ---- Bloqueio ----
-        if ((int) $row['block_ticket_id'] === 0
-            && $row['date_start'] !== null && $row['date_end'] !== null
-            && $row['date_start'] <= $block_threshold
-            && $row['date_end'] >= $today) {
-            $tid = self::openTicket($row, 'block', $config);
-            if ($tid > 0) {
-                (new self())->update(['id' => $row['id'], 'block_ticket_id' => $tid]);
-                $row['block_ticket_id'] = $tid;
-                $count++;
+        // Períodos a processar: sempre o 1, mais 2 e 3 se fracionado
+        $periods = [
+            1 => ['start' => $row['date_start'],  'end' => $row['date_end'],
+                  'block' => 'block_ticket_id',   'unblock' => 'unblock_ticket_id'],
+        ];
+        if (!empty($row['is_fracionado'])) {
+            foreach ([2, 3] as $n) {
+                if (!empty($row["date_start{$n}"])) {
+                    $periods[$n] = [
+                        'start'   => $row["date_start{$n}"],
+                        'end'     => $row["date_end{$n}"],
+                        'block'   => "block_ticket_id{$n}",
+                        'unblock' => "unblock_ticket_id{$n}",
+                        'num'     => $n,
+                    ];
+                }
             }
         }
 
-        // ---- Liberação ----
-        if ((int) $row['unblock_ticket_id'] === 0
-            && $row['date_end'] !== null
-            && $row['date_end'] <= $unblock_threshold
-            && $row['date_end'] >= $unblock_floor) {
-            $tid = self::openTicket($row, 'unblock', $config);
-            if ($tid > 0) {
-                (new self())->update(['id' => $row['id'], 'unblock_ticket_id' => $tid]);
-                $count++;
+        foreach ($periods as $pnum => $p) {
+            $row_with_period = array_merge($row, [
+                'date_start' => $p['start'],
+                'date_end'   => $p['end'],
+                '_period_num' => $pnum,
+            ]);
+
+            // Bloqueio
+            if ((int) ($row[$p['block']] ?? 0) === 0
+                && !empty($p['start']) && !empty($p['end'])
+                && $p['start'] <= $block_threshold
+                && $p['end'] >= $today) {
+                $tid = self::openTicket($row_with_period, 'block', $config);
+                if ($tid > 0) {
+                    (new self())->update(['id' => $row['id'], $p['block'] => $tid]);
+                    $row[$p['block']] = $tid;
+                    $count++;
+                }
+            }
+
+            // Liberação
+            if ((int) ($row[$p['unblock']] ?? 0) === 0
+                && !empty($p['end'])
+                && $p['end'] <= $unblock_threshold
+                && $p['end'] >= $unblock_floor) {
+                $tid = self::openTicket($row_with_period, 'unblock', $config);
+                if ($tid > 0) {
+                    (new self())->update(['id' => $row['id'], $p['unblock'] => $tid]);
+                    $count++;
+                }
             }
         }
 
@@ -424,37 +768,45 @@ class Period extends CommonDBTM
 
         $start = Html::convDate($row['date_start']);
         $end   = Html::convDate($row['date_end']);
+
+        // Sufixo de período para afastamentos fracionados
+        $pnum   = (int) ($row['_period_num'] ?? 1);
+        $psuffix = (!empty($row['is_fracionado']) && $pnum > 1)
+            ? sprintf(' [%s %d]', __('Período', 'hrvacation'), $pnum)
+            : '';
+
         $periodo = sprintf(
             __('Período de afastamento: %1$s a %2$s.', 'hrvacation'),
-            $start,
-            $end
+            $start, $end
         );
 
         if ($kind === 'block') {
-            $title = sprintf(__('Bloqueio de acessos - %s (afastamento)', 'hrvacation'), $username);
+            $title = sprintf(__('Bloqueio de acessos - %s (afastamento)', 'hrvacation'), $username) . $psuffix;
             $cat   = (int) $config['itilcategories_id_block'];
             $body  = $title . "\n\n" . $periodo . "\n\n"
                 . __('Solicitação do RH: bloquear os acessos do colaborador durante o período de afastamento.', 'hrvacation');
         } else {
-            $title = sprintf(__('Liberação de acessos - %s (retorno de afastamento)', 'hrvacation'), $username);
+            $title = sprintf(__('Liberação de acessos - %s (retorno de afastamento)', 'hrvacation'), $username) . $psuffix;
             $cat   = (int) $config['itilcategories_id_unblock'];
             $body  = $title . "\n\n" . $periodo . "\n\n"
                 . __('Solicitação do RH: liberar novamente os acessos do colaborador no retorno do afastamento.', 'hrvacation');
         }
 
-        $redir_id = (int) ($row['users_id_redirect'] ?? 0);
-        if ($redir_id > 0) {
-            $ruser = new User();
-            if ($ruser->getFromDB($redir_id)) {
-                $rname  = $ruser->getFriendlyName();
-                $remail = \UserEmail::getDefaultForUser($redir_id);
-                $rline  = $rname . ($remail ? " <{$remail}>" : '');
-                $body  .= "\n\n" . __('Redirecionar e-mail para:', 'hrvacation') . " " . $rline;
+        if ($kind === 'block') {
+            $redir_id = (int) ($row['users_id_redirect'] ?? 0);
+            if ($redir_id > 0) {
+                $ruser = new User();
+                if ($ruser->getFromDB($redir_id)) {
+                    $rname  = $ruser->getFriendlyName();
+                    $remail = \UserEmail::getDefaultForUser($redir_id);
+                    $rline  = $rname . ($remail ? " <{$remail}>" : '');
+                    $body  .= "\n\n" . __('Redirecionar e-mail para:', 'hrvacation') . " " . $rline;
+                }
             }
-        }
 
-        if (!empty($row['comment'])) {
-            $body .= "\n\n" . __('Observações do RH:', 'hrvacation') . " " . $row['comment'];
+            if (!empty($row['comment'])) {
+                $body .= "\n\n" . __('Observações do RH:', 'hrvacation') . " " . $row['comment'];
+            }
         }
 
         $input = [
@@ -469,10 +821,22 @@ class Period extends CommonDBTM
         if ($cat > 0) {
             $input['itilcategories_id'] = $cat;
         }
-        // O colaborador entra como requerente do chamado.
-        if ((int) $row['users_id'] > 0) {
-            $input['_users_id_requester'] = (int) $row['users_id'];
+
+        // Requerente = usuário do RH que cadastrou o afastamento (users_id_recipient).
+        // Fallback: usuário logado no momento da abertura (cron/post_addItem).
+        $requester_id = (int) ($row['users_id_recipient'] ?? 0);
+        if ($requester_id <= 0) {
+            $requester_id = (int) Session::getLoginUserID();
         }
+        if ($requester_id > 0) {
+            $input['_users_id_requester'] = $requester_id;
+        }
+
+        // O colaborador afastado entra como observador do chamado.
+        if ((int) $row['users_id'] > 0) {
+            $input['_users_id_observer'] = (int) $row['users_id'];
+        }
+
         // Grupo responsável pelo atendimento (se configurado).
         if (!empty($config['groups_id_assign'])) {
             $input['_groups_id_assign'] = (int) $config['groups_id_assign'];
@@ -551,8 +915,13 @@ class Period extends CommonDBTM
      */
     protected function cancelLinkedTickets()
     {
-        $reason = __('Férias canceladas pelo RH', 'hrvacation');
-        foreach (['block_ticket_id', 'unblock_ticket_id'] as $field) {
+        $reason = __('Afastamento cancelado pelo RH', 'hrvacation');
+        $fields = [
+            'block_ticket_id', 'unblock_ticket_id',
+            'block_ticket_id2', 'unblock_ticket_id2',
+            'block_ticket_id3', 'unblock_ticket_id3',
+        ];
+        foreach ($fields as $field) {
             $tid = (int) ($this->fields[$field] ?? 0);
             if ($tid > 0) {
                 self::cancelTicket($tid, $reason);
