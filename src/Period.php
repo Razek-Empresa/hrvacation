@@ -388,6 +388,10 @@ class Period extends CommonDBTM
         $this->initForm($ID, $options);
         $this->showFormHeader($options);
 
+        if (!empty($this->fields['users_id_recipient'])) {
+            echo Html::hidden('users_id_recipient', ['value' => (int) $this->fields['users_id_recipient']]);
+        }
+
         $fracionado = (int) ($this->fields['is_fracionado'] ?? 0);
 
         // ---- Linha 1: Usuário + Redirecionar e-mail ----
@@ -823,18 +827,35 @@ class Period extends CommonDBTM
         }
 
         // Requerente = usuário do RH que cadastrou o afastamento (users_id_recipient).
-        // Fallback: usuário logado no momento da abertura (cron/post_addItem).
+        // Se estiver zerado (registros legados), tenta recuperar o criador original pela tabela de logs.
         $requester_id = (int) ($row['users_id_recipient'] ?? 0);
+        if ($requester_id <= 0 && !empty($row['id'])) {
+            global $DB;
+            $log = $DB->request([
+                'SELECT' => ['users_id'],
+                'FROM'   => 'glpi_logs',
+                'WHERE'  => [
+                    'itemtype' => self::class,
+                    'items_id' => $row['id'],
+                ],
+                'ORDER'  => 'id ASC',
+                'LIMIT'  => 1,
+            ])->current();
+            if (!empty($log['users_id'])) {
+                $requester_id = (int) $log['users_id'];
+                // Atualiza o banco para fixar o criador nos próximos chamados
+                $DB->update(
+                    self::getTable(),
+                    ['users_id_recipient' => $requester_id],
+                    ['id' => $row['id']]
+                );
+            }
+        }
         if ($requester_id <= 0) {
             $requester_id = (int) Session::getLoginUserID();
         }
         if ($requester_id > 0) {
             $input['_users_id_requester'] = $requester_id;
-        }
-
-        // O colaborador afastado entra como observador do chamado.
-        if ((int) $row['users_id'] > 0) {
-            $input['_users_id_observer'] = (int) $row['users_id'];
         }
 
         // Grupo responsável pelo atendimento (se configurado).

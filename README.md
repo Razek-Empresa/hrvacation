@@ -252,6 +252,7 @@ Tabelas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_configs`.
 
 | Versão | Mudanças |
 |--------|----------|
+| 2.1.2 | Configuração da tarefa para modo CLI e frequência de 1h; recuperação do usuário de RH criador do afastamento para chamados de liberação legados; remoção do colaborador como observador. |
 | 2.1.1 | Exclusão de redirecionamento de e-mail e observações nos chamados de liberação; correção de validação na atualização de chamados e flexibilização do modo do cron (CLI/interno). |
 | 2.1.0 | Dropdown de quantidade de dias (1–200) no lugar da data final; suporte a afastamento fracionado em até 3 períodos com chamados independentes. |
 | 2.0.3 | Listagem própria com JOIN direto no banco, resolvendo exibição do nome do colaborador. |
