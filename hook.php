@@ -187,27 +187,25 @@ function plugin_hrvacation_install()
     }
 
     // --- Tarefa automática (cron) -------------------------------------------
-    // Modo EXTERNAL (CLI): roda via crontab do Linux (bin/console glpi:cron:run).
-    // Frequência de 1 hora para checar novos afastamentos e libertações pendentes.
+    // Modo INTERNAL (GLPI): roda durante o uso normal do sistema, sem precisar
+    // de crontab. Para timing preciso em produção, recomenda-se trocar para
+    // modo CLI em Configurar > Ações automáticas e agendar bin/console glpi:cron.
     CronTask::Register(
         Period::class,
         'vacationTickets',
-        HOUR_TIMESTAMP,
+        DAY_TIMESTAMP,
         [
             'comment' => 'Abre chamados de bloqueio/liberação de acessos conforme as férias cadastradas',
-            'mode'    => CronTask::MODE_EXTERNAL,
+            'mode'    => CronTask::MODE_INTERNAL,
             'state'   => CronTask::STATE_WAITING,
         ]
     );
 
-    // Garante que a tarefa existente esteja configurada para modo CLI, ativa e com checagem de 1 hora.
+    // Garante o modo INTERNAL mesmo em instalações que já tinham o cron
+    // registrado em modo CLI (externo) por versões anteriores do plugin.
     $DB->update(
         'glpi_crontasks',
-        [
-            'mode'      => CronTask::MODE_EXTERNAL,
-            'state'     => CronTask::STATE_WAITING,
-            'frequency' => HOUR_TIMESTAMP,
-        ],
+        ['mode' => CronTask::MODE_INTERNAL],
         [
             'itemtype' => Period::class,
             'name'     => 'vacationTickets',

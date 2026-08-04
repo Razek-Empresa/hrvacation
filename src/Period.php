@@ -269,7 +269,7 @@ class Period extends CommonDBTM
         if (empty($input['users_id_recipient'])) {
             $input['users_id_recipient'] = (int) Session::getLoginUserID();
         }
-        return $this->prepareCommon($input, true);
+        return $this->prepareCommon($input);
     }
 
     /**
@@ -277,102 +277,63 @@ class Period extends CommonDBTM
      */
     public function prepareInputForUpdate($input)
     {
-        return $this->prepareCommon($input, false);
+        return $this->prepareCommon($input);
     }
 
     /**
      * Regras comuns: calcula date_end dos períodos e valida datas.
+     *
+     * IMPORTANTE: só recalcula/valida quando os campos de data vierem no input.
+     * Updates parciais (ex.: o cron gravando *_ticket_id) passam direto, pois
+     * não trazem date_start/days_count e não devem ser bloqueados.
      */
-    protected function prepareCommon($input, $is_add = false)
+    protected function prepareCommon($input)
     {
-        if ($is_add) {
-            // Normaliza is_fracionado
+        // Update parcial: nenhum campo de período no input → não mexe em nada.
+        $touches_period = array_key_exists('date_start', $input)
+            || array_key_exists('days_count', $input)
+            || array_key_exists('is_fracionado', $input);
+
+        if (!$touches_period) {
+            return $input;
+        }
+
+        // Normaliza is_fracionado apenas se o formulário foi submetido.
+        if (array_key_exists('is_fracionado', $input)) {
             $input['is_fracionado'] = empty($input['is_fracionado']) ? 0 : 1;
+        }
 
-            // Período 1
-            $input['date_end'] = self::calcDateEnd(
-                $input['date_start'] ?? '',
-                $input['days_count'] ?? 0
-            );
+        // Período 1 — recalcula somente se veio início ou dias.
+        if (array_key_exists('date_start', $input) || array_key_exists('days_count', $input)) {
+            $start = $input['date_start'] ?? ($this->fields['date_start'] ?? '');
+            $days  = $input['days_count'] ?? ($this->fields['days_count'] ?? 0);
+            $input['date_end'] = self::calcDateEnd($start, $days);
 
-            // Períodos 2 e 3 (só se fracionado)
+            if (empty($start) || empty($input['date_end'])) {
+                Session::addMessageAfterRedirect(
+                    __('Informe a data de início e a quantidade de dias.', 'hrvacation'),
+                    false,
+                    ERROR
+                );
+                return false;
+            }
+        }
+
+        // Períodos 2 e 3 — só quando o formulário trouxe is_fracionado.
+        if (array_key_exists('is_fracionado', $input)) {
             foreach ([2, 3] as $n) {
-                if ($input['is_fracionado']
+                if (!empty($input['is_fracionado'])
                     && !empty($input["date_start{$n}"])
                     && !empty($input["days_count{$n}"])) {
                     $input["date_end{$n}"] = self::calcDateEnd(
                         $input["date_start{$n}"],
                         $input["days_count{$n}"]
                     );
-                } else {
+                } elseif (array_key_exists("date_start{$n}", $input)
+                       || array_key_exists("days_count{$n}", $input)) {
                     $input["date_start{$n}"] = null;
                     $input["days_count{$n}"] = 0;
                     $input["date_end{$n}"]   = null;
-                }
-            }
-
-            // Validação básica
-            if (empty($input['date_start']) || empty($input['date_end'])) {
-                Session::addMessageAfterRedirect(
-                    __('Informe a data de início e a quantidade de dias.', 'hrvacation'),
-                    false, ERROR
-                );
-                return false;
-            }
-        } else {
-            // Para atualização (update)
-            // Certifica-se de que fields está populado
-            $fields = $this->fields;
-            if ((empty($fields) || !isset($fields['id'])) && isset($input['id'])) {
-                $this->getFromDB($input['id']);
-                $fields = $this->fields;
-            }
-
-            // Apenas tratamos is_fracionado se ele foi enviado no input (ex: pelo formulário)
-            if (isset($input['is_fracionado'])) {
-                $input['is_fracionado'] = empty($input['is_fracionado']) ? 0 : 1;
-            }
-
-            // Recarrega valores atuais da DB se necessário para cálculo de término do P1
-            if (isset($input['date_start']) || isset($input['days_count'])) {
-                $current_start = isset($input['date_start']) ? $input['date_start'] : ($fields['date_start'] ?? '');
-                $current_days  = isset($input['days_count']) ? $input['days_count'] : ($fields['days_count'] ?? 0);
-                
-                $input['date_end'] = self::calcDateEnd($current_start, $current_days);
-
-                if (empty($current_start) || empty($input['date_end'])) {
-                    Session::addMessageAfterRedirect(
-                        __('Informe a data de início e a quantidade de dias.', 'hrvacation'),
-                        false, ERROR
-                    );
-                    return false;
-                }
-            }
-
-            // Trata P2 e P3 somente se is_fracionado ou as datas/dias correspondentes foram enviados
-            $check_fracionado = isset($input['is_fracionado']) ? $input['is_fracionado'] : ($fields['is_fracionado'] ?? 0);
-            
-            foreach ([2, 3] as $n) {
-                if (isset($input["date_start{$n}"]) || isset($input["days_count{$n}"]) || isset($input['is_fracionado'])) {
-                    if ($check_fracionado) {
-                        $p_start = isset($input["date_start{$n}"]) ? $input["date_start{$n}"] : ($fields["date_start{$n}"] ?? '');
-                        $p_days  = isset($input["days_count{$n}"]) ? $input["days_count{$n}"] : ($fields["days_count{$n}"] ?? 0);
-                        
-                        if (!empty($p_start) && !empty($p_days)) {
-                            $input["date_end{$n}"] = self::calcDateEnd($p_start, $p_days);
-                        } else {
-                            if (isset($input["date_start{$n}"]) || isset($input["days_count{$n}"])) {
-                                $input["date_start{$n}"] = null;
-                                $input["days_count{$n}"] = 0;
-                                $input["date_end{$n}"]   = null;
-                            }
-                        }
-                    } else {
-                        // Se não for fracionado, garante que zera P2 e P3
-                        $input["date_start{$n}"] = null;
-                        $input["days_count{$n}"] = 0;
-                        $input["date_end{$n}"]   = null;
-                    }
                 }
             }
         }
@@ -387,10 +348,6 @@ class Period extends CommonDBTM
     {
         $this->initForm($ID, $options);
         $this->showFormHeader($options);
-
-        if (!empty($this->fields['users_id_recipient'])) {
-            echo Html::hidden('users_id_recipient', ['value' => (int) $this->fields['users_id_recipient']]);
-        }
 
         $fracionado = (int) ($this->fields['is_fracionado'] ?? 0);
 
@@ -658,27 +615,25 @@ class Period extends CommonDBTM
         $config = Config::getConfig();
         $count  = 0;
 
-        // Períodos não excluídos que ainda têm algum chamado pendente (qualquer período).
+        // Busca todos os períodos não excluídos. O processDue() aplica todas as
+        // regras (datas, antecedência, chamado já existente) para cada período,
+        // então filtrar aqui só adiciona risco de query malformada.
         $iterator = $DB->request([
             'FROM'  => self::getTable(),
-            'WHERE' => [
-                'is_deleted' => 0,
-                'OR'         => [
-                    ['block_ticket_id'    => 0],
-                    ['unblock_ticket_id'  => 0],
-                    ['block_ticket_id2'   => 0],
-                    ['unblock_ticket_id2' => 0],
-                    ['block_ticket_id3'   => 0],
-                    ['unblock_ticket_id3' => 0],
-                ],
-            ],
+            'WHERE' => ['is_deleted' => 0],
         ]);
 
         foreach ($iterator as $row) {
-            $n = self::processDue($row, $config);
-            if ($n > 0) {
-                $task->addVolume($n);
-                $count += $n;
+            try {
+                $n = self::processDue($row, $config);
+                if ($n > 0) {
+                    $task->addVolume($n);
+                    $task->log("Período {$row['id']}: {$n} chamado(s) aberto(s).");
+                    $count += $n;
+                }
+            } catch (\Throwable $e) {
+                $task->log("ERRO no período {$row['id']}: " . $e->getMessage()
+                    . " em " . $e->getFile() . ":" . $e->getLine());
             }
         }
 
@@ -691,12 +646,14 @@ class Period extends CommonDBTM
      */
     protected static function processDue(array $row, array $config)
     {
+        global $DB;
+
         $today             = date('Y-m-d');
         $lead_block        = (int) $config['block_lead_days'];
         $lead_unblock      = (int) $config['unblock_lead_days'];
         $block_threshold   = date('Y-m-d', strtotime("+{$lead_block} days"));
         $unblock_threshold = date('Y-m-d', strtotime("+{$lead_unblock} days"));
-        $unblock_floor     = date('Y-m-d', strtotime('-30 days'));
+        $unblock_floor     = date('Y-m-d', strtotime('-365 days'));
 
         $count = 0;
 
@@ -733,7 +690,7 @@ class Period extends CommonDBTM
                 && $p['end'] >= $today) {
                 $tid = self::openTicket($row_with_period, 'block', $config);
                 if ($tid > 0) {
-                    (new self())->update(['id' => $row['id'], $p['block'] => $tid]);
+                    $DB->update(self::getTable(), [$p['block'] => $tid], ['id' => $row['id']]);
                     $row[$p['block']] = $tid;
                     $count++;
                 }
@@ -746,7 +703,8 @@ class Period extends CommonDBTM
                 && $p['end'] >= $unblock_floor) {
                 $tid = self::openTicket($row_with_period, 'unblock', $config);
                 if ($tid > 0) {
-                    (new self())->update(['id' => $row['id'], $p['unblock'] => $tid]);
+                    $DB->update(self::getTable(), [$p['unblock'] => $tid], ['id' => $row['id']]);
+                    $row[$p['unblock']] = $tid;
                     $count++;
                 }
             }
@@ -796,21 +754,19 @@ class Period extends CommonDBTM
                 . __('Solicitação do RH: liberar novamente os acessos do colaborador no retorno do afastamento.', 'hrvacation');
         }
 
-        if ($kind === 'block') {
-            $redir_id = (int) ($row['users_id_redirect'] ?? 0);
-            if ($redir_id > 0) {
-                $ruser = new User();
-                if ($ruser->getFromDB($redir_id)) {
-                    $rname  = $ruser->getFriendlyName();
-                    $remail = \UserEmail::getDefaultForUser($redir_id);
-                    $rline  = $rname . ($remail ? " <{$remail}>" : '');
-                    $body  .= "\n\n" . __('Redirecionar e-mail para:', 'hrvacation') . " " . $rline;
-                }
+        $redir_id = (int) ($row['users_id_redirect'] ?? 0);
+        if ($redir_id > 0) {
+            $ruser = new User();
+            if ($ruser->getFromDB($redir_id)) {
+                $rname  = $ruser->getFriendlyName();
+                $remail = \UserEmail::getDefaultForUser($redir_id);
+                $rline  = $rname . ($remail ? " <{$remail}>" : '');
+                $body  .= "\n\n" . __('Redirecionar e-mail para:', 'hrvacation') . " " . $rline;
             }
+        }
 
-            if (!empty($row['comment'])) {
-                $body .= "\n\n" . __('Observações do RH:', 'hrvacation') . " " . $row['comment'];
-            }
+        if (!empty($row['comment'])) {
+            $body .= "\n\n" . __('Observações do RH:', 'hrvacation') . " " . $row['comment'];
         }
 
         $input = [
@@ -827,35 +783,18 @@ class Period extends CommonDBTM
         }
 
         // Requerente = usuário do RH que cadastrou o afastamento (users_id_recipient).
-        // Se estiver zerado (registros legados), tenta recuperar o criador original pela tabela de logs.
+        // Fallback: usuário logado no momento da abertura (cron/post_addItem).
         $requester_id = (int) ($row['users_id_recipient'] ?? 0);
-        if ($requester_id <= 0 && !empty($row['id'])) {
-            global $DB;
-            $log = $DB->request([
-                'SELECT' => ['users_id'],
-                'FROM'   => 'glpi_logs',
-                'WHERE'  => [
-                    'itemtype' => self::class,
-                    'items_id' => $row['id'],
-                ],
-                'ORDER'  => 'id ASC',
-                'LIMIT'  => 1,
-            ])->current();
-            if (!empty($log['users_id'])) {
-                $requester_id = (int) $log['users_id'];
-                // Atualiza o banco para fixar o criador nos próximos chamados
-                $DB->update(
-                    self::getTable(),
-                    ['users_id_recipient' => $requester_id],
-                    ['id' => $row['id']]
-                );
-            }
-        }
         if ($requester_id <= 0) {
             $requester_id = (int) Session::getLoginUserID();
         }
         if ($requester_id > 0) {
             $input['_users_id_requester'] = $requester_id;
+        }
+
+        // O colaborador afastado entra como observador do chamado.
+        if ((int) $row['users_id'] > 0) {
+            $input['_users_id_observer'] = (int) $row['users_id'];
         }
 
         // Grupo responsável pelo atendimento (se configurado).

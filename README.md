@@ -171,6 +171,8 @@ ficam com o sufixo **[Período 2]** e **[Período 3]** para fácil identificaç�
 - **Bloqueio:** abre quando o início do período chega (hoje, antecedência ou retroativo)
   e o afastamento ainda não terminou.
 - **Liberação:** abre quando o término entra na janela de antecedência.
+  Períodos com término há mais de **365 dias** são ignorados, para não gerar
+  chamados retroativos de registros históricos.
 
 Dois gatilhos trabalham juntos:
 
@@ -187,22 +189,46 @@ Cada chamado é criado **uma única vez** — os IDs ficam gravados no afastamen
 
 ## Cron automático
 
-A tarefa automática roda em **modo GLPI (interno)** por padrão, mas isso depende
-de acesso ao sistema. Para garantir execução diária em produção, agende no
-crontab do servidor host:
+A tarefa automática (`vacationTickets`) roda em **modo GLPI (interno)** por padrão,
+o que depende de alguém acessar o sistema. Para garantir execução diária em
+produção, agende no crontab do servidor host:
 
 ```bash
 crontab -e
 ```
 
-Adicione (ajuste o nome do container e o horário):
+Adicione (ajuste o nome do container e o caminho do GLPI):
 
 ```
-0 7 * * * docker exec -u www-data SEU_CONTAINER php /var/glpi/bin/console glpi:cron:run >/dev/null 2>&1
+* * * * * docker exec -u www-data SEU_CONTAINER php /var/www/glpi/front/cron.php >/dev/null 2>&1
 ```
 
-Para testar na hora sem esperar o cron, vá em **Configurar › Ações automáticas ›
-vacationTickets › botão "Executar"**.
+> Rodar a cada minuto é seguro: o `cron.php` só executa cada tarefa quando o
+> intervalo configurado dela já passou. Como o `vacationTickets` está definido
+> para uma vez por dia, ele roda uma vez por dia.
+
+Em imagens oficiais `glpi/glpi`, o GLPI fica em `/var/www/glpi` e **não** há
+`bin/console` — use o `front/cron.php` como acima.
+
+Para testar na hora, vá em **Configurar › Ações automáticas › vacationTickets ›
+botão "Executar"**.
+
+### Solução de problemas
+
+Se a tarefa ficar travada em "Em execução" após um erro, o GLPI não a executa
+novamente. Resete o estado:
+
+```sql
+UPDATE glpi_crontasks SET state = 0 WHERE name = 'vacationTickets';
+```
+
+Para inspecionar o histórico de execuções e mensagens de erro:
+
+```sql
+SELECT date, content FROM glpi_crontasklogs
+WHERE crontasks_id = (SELECT id FROM glpi_crontasks WHERE name = 'vacationTickets')
+ORDER BY id DESC LIMIT 20;
+```
 
 ---
 
@@ -252,8 +278,10 @@ Tabelas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_configs`.
 
 | Versão | Mudanças |
 |--------|----------|
-| 2.1.2 | Configuração da tarefa para modo CLI e frequência de 1h; recuperação do usuário de RH criador do afastamento para chamados de liberação legados; remoção do colaborador como observador. |
-| 2.1.1 | Exclusão de redirecionamento de e-mail e observações nos chamados de liberação; correção de validação na atualização de chamados e flexibilização do modo do cron (CLI/interno). |
+| 2.1.4 | Correção da query do cron (`!= null` nunca casa em SQL) que impedia o processamento dos períodos. |
+| 2.1.3 | Correção crítica: gravação do vínculo do chamado no período (updates parciais eram abortados pela validação). |
+| 2.1.2 | Ajuste da seleção de períodos pendentes no cron. |
+| 2.1.1 | Janela de liberação ampliada de 30 para 365 dias; tratamento de exceções no cron com log detalhado. |
 | 2.1.0 | Dropdown de quantidade de dias (1–200) no lugar da data final; suporte a afastamento fracionado em até 3 períodos com chamados independentes. |
 | 2.0.3 | Listagem própria com JOIN direto no banco, resolvendo exibição do nome do colaborador. |
 | 2.0.2 | Tentativa de exibição via `getSpecificValueToDisplay`. |
