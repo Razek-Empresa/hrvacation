@@ -12,6 +12,11 @@ próprio par de chamados. Cada chamado já nasce com **tarefas separadas**
 (bloquear AD, Sectra, Office 365, redirecionar e-mail, etc.),
 totalmente configuráveis pela interface.
 
+Opcionalmente, o próprio GLPI **executa** o bloqueio e a liberação: desabilita e
+habilita a conta no **Active Directory** local (LDAPS) e no **Microsoft 365**
+(Entra ID), e agenda a **resposta automática de ausência** na caixa de correio.
+Tudo com simulação, limites de segurança e registro de cada ação no chamado.
+
 > Compatível com **GLPI 10.0.x** e **GLPI 11.0.x**.
 
 ---
@@ -27,6 +32,10 @@ totalmente configuráveis pela interface.
 - [Fracionado](#fracionado)
 - [Como os chamados são abertos](#como-os-chamados-são-abertos)
 - [Cron automático](#cron-automático)
+- [Automação de acessos](#automação-de-acessos)
+- [Integração com Microsoft 365](#integração-com-microsoft-365)
+- [Integração com Active Directory](#integração-com-active-directory)
+- [Resposta automática de ausência](#resposta-automática-de-ausência)
 - [Cancelamento ao excluir](#cancelamento-ao-excluir)
 - [Estrutura de arquivos](#estrutura-de-arquivos)
 - [Notas técnicas](#notas-técnicas)
@@ -50,6 +59,9 @@ totalmente configuráveis pela interface.
 - **Cancelamento automático** dos chamados vinculados ao excluir um afastamento.
 - **Categoria, grupo responsável e tipo** dos chamados definidos na configuração.
 - Acesso pela **interface padrão** (Ferramentas) e pela **interface simplificada** (Plug-ins).
+- **Bloqueio e liberação automáticos** no Active Directory (LDAPS) e no Microsoft 365, executados pelo GLPI.
+- **Resposta automática de ausência** agendada no Microsoft 365, com regra e mensagem editáveis.
+- **Segurança da automação:** modo simulação, data de corte, disjuntor, lista de exceção, limite de tentativas e segredos criptografados.
 
 ---
 
@@ -58,7 +70,10 @@ totalmente configuráveis pela interface.
 | Item | Versão |
 |------|--------|
 | GLPI | 10.0.0+ ou 11.0.x |
-| PHP  | 7.4+ |
+| PHP  | 7.4+, com as extensões `curl`, `ldap` e `openssl` (para a automação) |
+
+A automação é opcional. Para usá-la: um app registrado no Entra ID (Microsoft
+365) e/ou uma conta de serviço no AD com LDAPS habilitado.
 
 ---
 
@@ -112,6 +127,21 @@ Bloquear acesso Office 365
 Configurar mensagem de ausência Office 365
 Redirecionar Email
 ```
+
+### Automação
+
+| Campo | Função |
+|-------|--------|
+| **Automação ativa** | Liga a execução automática. Ao ativar, define a data de corte. |
+| **Modo simulação (dry-run)** | Registra nos chamados o que seria feito, sem executar. |
+| **Bloquear no Microsoft 365** | Desabilita/habilita a conta no Entra ID. |
+| **Bloquear no Active Directory** | Desabilita/habilita a conta no AD local. |
+| **Limite de contas por execução** | Disjuntor: acima disso, nenhum bloqueio é executado. |
+| **Contas nunca bloqueadas** | Login do GLPI ou e-mail, um por linha. |
+
+As seções **Microsoft 365**, **Active Directory** e **Resposta automática de
+ausência** da mesma tela têm as credenciais e regras de cada integração,
+cada uma com botão de teste que não altera nenhuma conta.
 
 ---
 
@@ -232,6 +262,139 @@ ORDER BY id DESC LIMIT 20;
 
 ---
 
+## Automação de acessos
+
+Quando habilitada, a automação age no momento em que o chamado é aberto (ao
+cadastrar ou pela tarefa automática) e registra cada ação como tarefa no
+chamado. Regras comuns aos três destinos (AD, Microsoft 365 e resposta
+automática):
+
+- **Data de corte:** só chamados abertos depois da ativação da automação são
+  processados; o histórico segue o processo manual.
+- **Modo simulação:** com o dry-run ligado, nada é alterado; cada chamado recebe a
+  descrição do que seria feito. Ao desligá-lo, as ações simuladas ainda pendentes
+  são executadas.
+- **Disjuntor:** se houver mais bloqueios pendentes que o limite, nada é executado
+  na rodada e o motivo fica registrado.
+- **Lista de exceção:** contas listadas nunca são alteradas; o chamado registra que
+  foram puladas.
+- **Tentativas:** cada operação é tentada até 3 vezes. O chamado recebe uma tarefa
+  na primeira falha e outra se a última também falhar; falha ao liberar é marcada
+  como "intervenção manual necessária".
+- **Conta inexistente:** se o colaborador não tem conta no destino (por exemplo,
+  sem Microsoft 365), é registrado uma única vez que não há nada a fazer.
+- **Independência:** cada destino é controlado separadamente; a falha de um não
+  afeta os outros.
+
+---
+
+## Integração com Microsoft 365
+
+Quando um chamado de bloqueio é aberto, o GLPI desabilita a conta do
+colaborador no Microsoft 365 e encerra as sessões ativas. No chamado de
+liberação, habilita a conta novamente. Cada ação vira uma tarefa no chamado.
+
+### Permissões do app (Entra ID)
+
+Permissões de **aplicativo** do Microsoft Graph, com consentimento do administrador:
+
+| Permissão | Uso |
+|-----------|-----|
+| `User.Read.All` | Localizar a conta |
+| `User.EnableDisableAccount.All` | Bloquear e liberar a conta |
+| `User.RevokeSessions.All` | Encerrar sessões ativas no bloqueio |
+| `MailboxSettings.ReadWrite` | Resposta automática de ausência (só se a função estiver ativada) |
+
+O app não consegue alterar senhas, grupos, licenças nem ler e-mails. Com a resposta automática ativada, ele também pode alterar as configurações das caixas de correio, o que torna a proteção do segredo ainda mais importante.
+
+### Proteção do segredo
+
+- Criptografado no banco com a chave do GLPI (`GLPIKey`); o backup do banco sozinho não o expõe.
+- Nunca é exibido novamente após salvo; para trocar, digite um novo.
+- Não é gravado no histórico do GLPI nem devolvido por nenhum endpoint.
+- Recriptografado automaticamente se a chave do GLPI for trocada (`glpi:security:change_key`).
+- O botão **Salvar e testar conexão** confere a autenticação e as permissões concedidas, e avisa se o app tiver permissões além do necessário.
+
+> Faça backup do arquivo de chave do GLPI (`glpicrypt.key`). Sem ele, o
+> segredo não pode ser lido e precisa ser cadastrado de novo.
+
+### Identificação da conta
+
+A conta no Microsoft 365 é localizada pelo **e-mail do usuário no GLPI**.
+Usuários sem e-mail cadastrado geram um erro no chamado; após cadastrar o
+e-mail, a operação é retentada automaticamente.
+
+---
+
+## Integração com Active Directory
+
+Quando um chamado de bloqueio é aberto, o GLPI desabilita a conta do
+colaborador no AD local; no chamado de liberação, habilita novamente. Tudo
+acontece dentro do GLPI, sem servidor ou serviço adicional.
+
+### Pré-requisitos
+
+- Controlador de domínio com **LDAPS** (porta 636) e certificado emitido pela AC interna.
+- Container do GLPI capaz de resolver o nome do controlador e alcançar a porta 636.
+- **Conta de serviço** dedicada, fora de grupos administrativos, com senha longa.
+- **Delegação de controle** na OU dos colaboradores: somente *Ler* e *Gravar*
+  `userAccountControl` em objetos Usuário.
+
+### Proteções
+
+- Conexão sempre criptografada e com o certificado do controlador verificado
+  contra a AC interna; sem o certificado da AC, o plugin recusa a conexão.
+- Senha criptografada com a chave do GLPI, nunca exibida, fora do histórico e
+  incluída na rotação de chaves.
+- Só contas **dentro da OU configurada** são alteradas.
+- Contas protegidas (`adminCount=1`) são recusadas, além de a delegação já não
+  alcançá-las.
+- Apenas o bit de conta desabilitada do `userAccountControl` é alterado.
+- Se a autenticação falhar, a rodada para imediatamente, evitando bloquear a
+  conta de serviço por tentativas repetidas.
+- O botão **Salvar e testar conexão com o AD** confere conexão, certificado,
+  autenticação e permissão de escrita na OU, sem alterar nenhuma conta.
+
+> **AC que assina com SHA-1:** o OpenSSL moderno recusa esses certificados. A
+> opção "Aceitar certificado assinado com SHA-1" libera apenas essa regra; a AC e
+> o nome do servidor continuam verificados. O ideal é migrar a AC para SHA-256 e
+> desmarcar a opção.
+
+> Uma sessão do Windows já aberta não é encerrada no momento do bloqueio; ela
+> deixa de funcionar ao bloquear a tela, sair ou expirar a autenticação.
+
+---
+
+## Resposta automática de ausência
+
+No chamado de bloqueio, o GLPI agenda a resposta automática na caixa de correio
+do colaborador; o próprio Exchange liga e desliga a mensagem nos horários
+definidos. Funciona mesmo com a conta bloqueada.
+
+A regra fica explícita e editável na configuração, com um resumo em linguagem
+simples na própria tela:
+
+| Campo | Padrão |
+|-------|--------|
+| Início da mensagem | Primeiro dia do afastamento, 00h |
+| Encerramento | Dia do retorno (dia seguinte ao último dia), 00h |
+| Fuso horário | Brasília |
+| Quem recebe | Somente pessoas da empresa |
+| No chamado de liberação | Manter até o encerramento agendado |
+| Ao excluir o afastamento | Desligar na hora |
+| Resposta já configurada pelo colaborador | Substituir |
+
+A mensagem é um modelo com os marcadores `{nome}`, `{inicio}`, `{fim}`,
+`{retorno}` e `{contato}` (frase com a pessoa indicada em "Redirecionar e-mail
+para", vazia se não houver).
+
+Exige a permissão de aplicativo `MailboxSettings.ReadWrite` no app do Entra ID.
+
+> Se as datas de um afastamento forem alteradas depois de a mensagem ter sido
+> agendada, ela não é atualizada automaticamente: exclua e cadastre novamente.
+
+---
+
 ## Cancelamento ao excluir
 
 Ao **excluir** um afastamento, todos os chamados vinculados (até 6, nos 3 períodos)
@@ -250,7 +413,12 @@ hrvacation/
 ├── src/
 │   ├── Period.php            # itemtype + formulário + calendário + timeline + cron + fracionado
 │   ├── Config.php            # configuração (linha única)
-│   └── Profile.php           # aba "Afastamentos" no formulário de Perfis
+│   ├── Profile.php           # aba "Afastamentos" no formulário de Perfis
+│   ├── Automation.php        # fila de operações, regras de segurança e registro nos chamados
+│   ├── M365.php              # cliente do Microsoft Graph (contas e resposta automática)
+│   ├── AdLdap.php            # cliente LDAPS do Active Directory
+│   ├── AutoReplyRule.php     # regra da resposta automática (cálculo e resumo)
+│   └── NotFoundException.php # conta inexistente no destino (sem nova tentativa)
 └── front/
     ├── period.php            # listagem própria com JOIN direto
     ├── period.form.php       # formulário (exibe e processa)
@@ -259,7 +427,8 @@ hrvacation/
     └── config.form.php       # configuração do plugin
 ```
 
-Tabelas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_configs`.
+Tabelas: `glpi_plugin_hrvacation_periods`, `glpi_plugin_hrvacation_configs` e
+`glpi_plugin_hrvacation_executions` (auditoria das ações automáticas).
 
 ---
 
@@ -271,6 +440,8 @@ Tabelas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_configs`.
 - Calendário e linha do tempo em PHP puro, sem dependências JS externas.
 - Camada `front/` mantida (suportada pelo GLPI 11 por compatibilidade).
 - Direito do plugin injetado na sessão a cada requisição para funcionar na interface simplificada.
+- Segredos (client secret do Microsoft 365 e senha da conta de serviço do AD) gravados criptografados com a `GLPIKey`, fora do histórico e registrados em `secured_fields` para a rotação de chaves.
+- Toda a automação roda dentro do GLPI: não há endpoint público, worker externo nem token de API.
 
 ---
 
@@ -278,6 +449,22 @@ Tabelas: `glpi_plugin_hrvacation_periods` e `glpi_plugin_hrvacation_configs`.
 
 | Versão | Mudanças |
 |--------|----------|
+| 2.8.1 | Conta ou caixa inexistente no destino gera um único registro "sem ação", sem novas tentativas. Erros reais geram tarefa só na 1ª e na última tentativa; alerta de intervenção manual apenas após a última. Situações em português nas tarefas; registros sem informação útil ficam só no histórico interno. |
+| 2.8.0 | Regra da resposta automática editável na configuração: horário de início e de encerramento, fuso horário, quem recebe, comportamento no chamado de liberação e na exclusão, e se substitui uma resposta já configurada pelo colaborador. Resumo da regra exibido na tela com um exemplo de datas. |
+| 2.7.2 | Liberação não desliga mais a resposta automática antes do retorno: o agendamento a encerra no dia da volta; o plugin só desliga se a data de retorno já tiver passado. Exclusão do afastamento continua desligando na hora. |
+| 2.7.1 | Resposta automática com a permissão concedida direto no app do Entra ID; o teste de conexão confere se ela foi concedida. |
+| 2.7.0 | Resposta automática de ausência no Microsoft 365: configurada no bloqueio com agendamento até o dia do retorno, somente para remetentes internos, com modelo editável; desligada na liberação e ao excluir o afastamento. Exige a permissão MailboxSettings.ReadWrite no app do Entra ID, conferida pelo teste de conexão. |
+| 2.6.2 | Opção de compatibilidade com AC interna que assina com SHA-1 (desligada por padrão): aceita a assinatura legada mantendo a verificação da AC e do nome do servidor, cifras fortes e TLS 1.2 no mínimo. |
+| 2.6.1 | Compatibilidade com builds do PHP sem contexto TLS por conexão (LDAP_OPT_X_TLS_NEWCTX), mantendo a verificação obrigatória do certificado. |
+| 2.6.0 | Active Directory executado direto pelo GLPI via LDAPS, com certificado verificado contra a AC interna; senha da conta de serviço criptografada (GLPIKey); só altera contas dentro da OU configurada e recusa contas protegidas; teste que confere a permissão de escrita sem alterar contas. Removidos o worker PowerShell, o endpoint público e o token. |
+| 2.5.0 | Endpoint do worker liberado no firewall do GLPI 11 (sem sessão); token enviado no cabeçalho e guardado com DPAPI no Windows; worker dedicado ao AD, com modo de simulação local. |
+| 2.4.3 | Data de corte da automação: apenas chamados abertos após a ativação são processados, evitando agir sobre o histórico. |
+| 2.4.2 | Removido o campo "Domínio padrão": a conta no Microsoft 365 é localizada somente pelo e-mail do usuário no GLPI. |
+| 2.4.1 | Lista de contas nunca bloqueadas aceita login do GLPI ou e-mail, sem diferenciar maiúsculas; avaliação centralizada no GLPI também para o worker do AD. |
+| 2.4.0 | Microsoft 365 executado direto pelo GLPI (app do Entra ID com client secret); segredo criptografado com a GLPIKey, mascarado na tela, fora do histórico e incluído na rotação de chaves; permissões mínimas (User.Read.All, User.EnableDisableAccount.All, User.RevokeSessions.All); teste de conexão que confere as permissões concedidas; aviso de expiração do segredo. Worker PowerShell passa a cuidar apenas do AD. |
+| 2.3.0 | Integração com Microsoft 365 (Entra ID) via worker PowerShell com autenticação por certificado; AD e M365 habilitáveis separadamente; controle de execução por destino, com limite de 3 tentativas e sem reenvio em dry-run; disjuntor corrigido; identificação no M365 pelo e-mail do usuário. |
+| 2.2.1 | Tarefa automática registrada em modo externo (CLI); o modo escolhido pelo administrador é preservado nas atualizações. |
+| 2.2.0 | Base da automação: endpoint para worker externo, tabela de auditoria de execuções e configurações de segurança (dry-run, limite, lista de exceção, token). |
 | 2.1.4 | Correção da query do cron (`!= null` nunca casa em SQL) que impedia o processamento dos períodos. |
 | 2.1.3 | Correção crítica: gravação do vínculo do chamado no período (updates parciais eram abortados pela validação). |
 | 2.1.2 | Ajuste da seleção de períodos pendentes no cron. |

@@ -87,6 +87,26 @@ function plugin_hrvacation_install()
         ]);
     }
 
+    // --- Tabela de execuções (auditoria da automação) ------------------------
+    if (!$DB->tableExists('glpi_plugin_hrvacation_executions')) {
+        $query = "CREATE TABLE `glpi_plugin_hrvacation_executions` (
+            `id`           int {$sign} NOT NULL AUTO_INCREMENT,
+            `periods_id`   int {$sign} NOT NULL DEFAULT '0',
+            `period_num`   tinyint     NOT NULL DEFAULT '1',
+            `action`       varchar(20)          DEFAULT NULL,
+            `target`       varchar(20)          DEFAULT NULL,
+            `status`       varchar(20)          DEFAULT NULL,
+            `message`      text,
+            `tickets_id`   int {$sign} NOT NULL DEFAULT '0',
+            `date_creation` timestamp  NULL     DEFAULT NULL,
+            PRIMARY KEY (`id`),
+            KEY `periods_id` (`periods_id`),
+            KEY `action` (`action`),
+            KEY `status` (`status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collation} ROW_FORMAT=DYNAMIC;";
+        $DB->doQuery($query);
+    }
+
     // --- Migração de instalações já existentes ------------------------------
     $migration = new Migration(PLUGIN_HRVACATION_VERSION);
 
@@ -131,7 +151,110 @@ function plugin_hrvacation_install()
             $migration->addField($t, "unblock_ticket_id{$n}", "int {$sign} NOT NULL DEFAULT '0'", ['after' => "block_ticket_id{$n}"]);
         }
     }
+    // Campos de automação (worker AD / Microsoft 365)
+    $c = 'glpi_plugin_hrvacation_configs';
+    if (!$DB->fieldExists($c, 'automation_enabled')) {
+        $migration->addField($c, 'automation_enabled', "tinyint NOT NULL DEFAULT '0'");
+    }
+    if (!$DB->fieldExists($c, 'automation_dryrun')) {
+        $migration->addField($c, 'automation_dryrun', "tinyint NOT NULL DEFAULT '1'");
+    }
+    // Token do antigo worker: não é mais usado (tudo roda dentro do GLPI).
+    if ($DB->fieldExists($c, 'automation_token')) {
+        $migration->dropField($c, 'automation_token');
+    }
+
+    // Active Directory (LDAPS). A senha é gravada criptografada (GLPIKey).
+    foreach ([
+        'ad_host'              => 'string',
+        'ad_base_dn'           => 'string',
+        'ad_bind_user'         => 'string',
+        'ad_bind_password'     => 'text',
+        'ad_ca_cert'           => 'text',
+    ] as $field => $type) {
+        if (!$DB->fieldExists($c, $field)) {
+            $migration->addField($c, $field, $type);
+        }
+    }
+    $autoreply_new = !$DB->fieldExists($c, 'autoreply_message');
+    if (!$DB->fieldExists($c, 'automation_autoreply')) {
+        $migration->addField($c, 'automation_autoreply', "tinyint NOT NULL DEFAULT '0'");
+    }
+    if ($autoreply_new) {
+        $migration->addField($c, 'autoreply_message', 'text');
+    }
+    // Regra da resposta automática (padrões = comportamento original).
+    foreach ([
+        'autoreply_start_hour' => "tinyint NOT NULL DEFAULT '0'",
+        'autoreply_end_hour'   => "tinyint NOT NULL DEFAULT '0'",
+        'autoreply_timezone'   => "varchar(64) NOT NULL DEFAULT 'E. South America Standard Time'",
+        'autoreply_audience'   => "varchar(20) NOT NULL DEFAULT 'none'",
+        'autoreply_on_unblock' => "varchar(10) NOT NULL DEFAULT 'keep'",
+        'autoreply_on_delete'  => "tinyint NOT NULL DEFAULT '1'",
+        'autoreply_overwrite'  => "tinyint NOT NULL DEFAULT '1'",
+    ] as $field => $type) {
+        if (!$DB->fieldExists($c, $field)) {
+            $migration->addField($c, $field, $type);
+        }
+    }
+    if (!$DB->fieldExists($c, 'ad_allow_sha1')) {
+        $migration->addField($c, 'ad_allow_sha1', "tinyint NOT NULL DEFAULT '0'");
+    }
+    if (!$DB->fieldExists($c, 'ad_port')) {
+        $migration->addField($c, 'ad_port', "int NOT NULL DEFAULT '636'");
+    }
+    if (!$DB->fieldExists($c, 'ad_password_updated')) {
+        $migration->addField($c, 'ad_password_updated', "timestamp NULL DEFAULT NULL");
+    }
+    if (!$DB->fieldExists($c, 'automation_max_per_run')) {
+        $migration->addField($c, 'automation_max_per_run', "int NOT NULL DEFAULT '5'");
+    }
+    if (!$DB->fieldExists($c, 'automation_exclude')) {
+        $migration->addField($c, 'automation_exclude', 'text');
+    }
+    if (!$DB->fieldExists($c, 'automation_o365')) {
+        $migration->addField($c, 'automation_o365', "tinyint NOT NULL DEFAULT '0'");
+    }
+    if (!$DB->fieldExists($c, 'automation_ad')) {
+        $migration->addField($c, 'automation_ad', "tinyint NOT NULL DEFAULT '0'");
+    }
+    $since_new = !$DB->fieldExists($c, 'automation_since');
+    if ($since_new) {
+        $migration->addField($c, 'automation_since', "timestamp NULL DEFAULT NULL");
+    }
+
+    // Microsoft 365 (Entra ID). O client secret é gravado criptografado (GLPIKey).
+    if (!$DB->fieldExists($c, 'm365_tenant_id')) {
+        $migration->addField($c, 'm365_tenant_id', 'string');
+    }
+    if (!$DB->fieldExists($c, 'm365_client_id')) {
+        $migration->addField($c, 'm365_client_id', 'string');
+    }
+    if (!$DB->fieldExists($c, 'm365_client_secret')) {
+        $migration->addField($c, 'm365_client_secret', 'text');
+    }
+    if (!$DB->fieldExists($c, 'm365_secret_updated')) {
+        $migration->addField($c, 'm365_secret_updated', "timestamp NULL DEFAULT NULL");
+    }
+    if (!$DB->fieldExists($c, 'm365_secret_expires')) {
+        $migration->addField($c, 'm365_secret_expires', "date DEFAULT NULL");
+    }
+    if ($DB->fieldExists($c, 'm365_fallback_domain')) {
+        $migration->dropField($c, 'm365_fallback_domain');
+    }
     $migration->executeMigration();
+
+    // Modelo padrão da resposta automática.
+    if (!empty($autoreply_new)) {
+        $DB->update('glpi_plugin_hrvacation_configs',
+            ['autoreply_message' => \GlpiPlugin\Hrvacation\Automation::defaultAutoReplyMessage()], ['id' => 1]);
+    }
+
+    // Data de corte da automação: o histórico anterior não é processado.
+    if (!empty($since_new)) {
+        $DB->update('glpi_plugin_hrvacation_configs', ['automation_since' => date('Y-m-d H:i:s')], ['id' => 1]);
+    }
+
 
     // --- Preferências de exibição (colunas padrão da listagem) --------------
     // Remove todas as preferências (globais e pessoais) para forçar o padrão
@@ -188,27 +311,20 @@ function plugin_hrvacation_install()
 
     // --- Tarefa automática (cron) -------------------------------------------
     // Modo INTERNAL (GLPI): roda durante o uso normal do sistema, sem precisar
-    // de crontab. Para timing preciso em produção, recomenda-se trocar para
-    // modo CLI em Configurar > Ações automáticas e agendar bin/console glpi:cron.
+    // Tarefa automática diária.
+    
+    // Registra a tarefa em modo EXTERNAL (CLI), adequado para disparo via
+    // crontab (front/cron.php ou bin/console). O modo definido pelo
+    // administrador em Configurar > Ações automáticas é preservado nas
+    // atualizações — o Register só aplica o padrão na primeira criação.
     CronTask::Register(
         Period::class,
         'vacationTickets',
         DAY_TIMESTAMP,
         [
-            'comment' => 'Abre chamados de bloqueio/liberação de acessos conforme as férias cadastradas',
-            'mode'    => CronTask::MODE_INTERNAL,
+            'comment' => 'Abre chamados de bloqueio/liberação de acessos conforme os afastamentos cadastrados',
+            'mode'    => CronTask::MODE_EXTERNAL,
             'state'   => CronTask::STATE_WAITING,
-        ]
-    );
-
-    // Garante o modo INTERNAL mesmo em instalações que já tinham o cron
-    // registrado em modo CLI (externo) por versões anteriores do plugin.
-    $DB->update(
-        'glpi_crontasks',
-        ['mode' => CronTask::MODE_INTERNAL],
-        [
-            'itemtype' => Period::class,
-            'name'     => 'vacationTickets',
         ]
     );
 
@@ -224,7 +340,8 @@ function plugin_hrvacation_uninstall()
 {
     global $DB;
 
-    foreach (['glpi_plugin_hrvacation_periods', 'glpi_plugin_hrvacation_configs'] as $table) {
+    foreach (['glpi_plugin_hrvacation_periods', 'glpi_plugin_hrvacation_configs',
+              'glpi_plugin_hrvacation_executions'] as $table) {
         if ($DB->tableExists($table)) {
             $DB->doQuery("DROP TABLE `$table`");
         }

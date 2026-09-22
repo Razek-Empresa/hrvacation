@@ -13,7 +13,7 @@
 use GlpiPlugin\Hrvacation\Period;
 use GlpiPlugin\Hrvacation\Profile;
 
-define('PLUGIN_HRVACATION_VERSION', '2.1.4');
+define('PLUGIN_HRVACATION_VERSION', '2.8.1');
 define('PLUGIN_HRVACATION_MIN_GLPI', '10.0.0');
 
 /**
@@ -25,6 +25,13 @@ function plugin_init_hrvacation()
 
     // Obrigatório para o GLPI aceitar os formulários do plugin.
     $PLUGIN_HOOKS['csrf_compliant']['hrvacation'] = true;
+
+    // Campos criptografados com a GLPIKey: ao trocar a chave do GLPI
+    // (glpi:security:change_key), o segredo é recriptografado junto.
+    $PLUGIN_HOOKS['secured_fields']['hrvacation'] = [
+        'glpi_plugin_hrvacation_configs.m365_client_secret',
+        'glpi_plugin_hrvacation_configs.ad_bind_password',
+    ];
 
     // Exibe o direito do plugin na tela de Perfis (aba "Afastamentos").
     Plugin::registerClass(Profile::class, ['addtabon' => 'Profile']);

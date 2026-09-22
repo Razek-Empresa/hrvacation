@@ -1,0 +1,20 @@
+# Sistema operacional / editores
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Nunca versionar certificados, chaves ou segredos
+*.pem
+*.key
+*.pfx
+*.cer
+*.crt
+.env
+*.secret
+
+# Logs e temporários
+*.log
+*.tmp
+*.bak
