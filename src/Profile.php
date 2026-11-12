@@ -18,8 +18,12 @@ use Session;
  */
 class Profile extends CommonDBTM
 {
-    /** Usa o direito padrão de "perfil" do GLPI para controlar a edição. */
-    public static $rightname = 'profile';
+    /**
+     * Usa o direito padrão de "perfil" do GLPI para controlar a edição.
+     *
+     * Tipado como "string" por exigência do GLPI 12 (ver Period::$rightname).
+     */
+    public static string $rightname = 'profile';
 
     public static function getTypeName($nb = 0)
     {

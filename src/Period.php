@@ -24,11 +24,17 @@ use User;
  */
 class Period extends CommonDBTM
 {
-    /** Direito usado para controlar o acesso ao plugin (configurável em Perfis). */
-    public static $rightname = 'plugin_hrvacation_period';
+    /**
+     * Direito usado para controlar o acesso ao plugin (configurável em Perfis).
+     *
+     * O tipo "string" é obrigatório a partir do GLPI 12: o núcleo declara
+     * CommonGLPI::$rightname como "public static string", e o PHP exige que a
+     * classe filha repita o mesmo tipo (invariância de propriedades).
+     */
+    public static string $rightname = 'plugin_hrvacation_period';
 
     /** Mantém histórico de alterações na aba "Histórico". */
-    public $dohistory = true;
+    public bool $dohistory = true;
 
     /**
      * Nome do tipo de item exibido na interface.
@@ -283,58 +289,57 @@ class Period extends CommonDBTM
     /**
      * Regras comuns: calcula date_end dos períodos e valida datas.
      *
-     * IMPORTANTE: só recalcula/valida quando os campos de data vierem no input.
-     * Updates parciais (ex.: o cron gravando *_ticket_id) passam direto, pois
-     * não trazem date_start/days_count e não devem ser bloqueados.
+     * Distingue dois cenários pelo campo oculto `_hrvac_form`:
+     *  - Submissão do formulário: normaliza todos os períodos e valida.
+     *  - Update parcial (ex.: cron gravando *_ticket_id): passa direto.
      */
     protected function prepareCommon($input)
     {
-        // Update parcial: nenhum campo de período no input → não mexe em nada.
-        $touches_period = array_key_exists('date_start', $input)
-            || array_key_exists('days_count', $input)
-            || array_key_exists('is_fracionado', $input);
+        $from_form = !empty($input['_hrvac_form']);
+        unset($input['_hrvac_form']);
 
-        if (!$touches_period) {
+        if (!$from_form) {
+            // Update parcial — nada a calcular. Ainda assim, protege contra
+            // strings vazias em colunas de data que possam vir no input.
+            foreach (['date_start', 'date_end', 'date_start2', 'date_end2',
+                      'date_start3', 'date_end3'] as $f) {
+                if (array_key_exists($f, $input) && $input[$f] === '') {
+                    $input[$f] = null;
+                }
+            }
             return $input;
         }
 
-        // Normaliza is_fracionado apenas se o formulário foi submetido.
-        if (array_key_exists('is_fracionado', $input)) {
-            $input['is_fracionado'] = empty($input['is_fracionado']) ? 0 : 1;
+        // ---- Submissão do formulário ----
+        $input['is_fracionado'] = empty($input['is_fracionado']) ? 0 : 1;
+
+        // Período 1 (obrigatório)
+        $start = $input['date_start'] ?? '';
+        $days  = (int) ($input['days_count'] ?? 0);
+        if (empty($start) || $days <= 0) {
+            Session::addMessageAfterRedirect(
+                __('Informe a data de início e a quantidade de dias.', 'hrvacation'),
+                false,
+                ERROR
+            );
+            return false;
         }
+        $input['date_end'] = self::calcDateEnd($start, $days);
 
-        // Período 1 — recalcula somente se veio início ou dias.
-        if (array_key_exists('date_start', $input) || array_key_exists('days_count', $input)) {
-            $start = $input['date_start'] ?? ($this->fields['date_start'] ?? '');
-            $days  = $input['days_count'] ?? ($this->fields['days_count'] ?? 0);
-            $input['date_end'] = self::calcDateEnd($start, $days);
+        // Períodos 2 e 3: preenchidos apenas quando fracionado e completos.
+        // Caso contrário, gravam NULL (evita erro de data vazia no MySQL).
+        foreach ([2, 3] as $n) {
+            $s = $input["date_start{$n}"] ?? '';
+            $d = (int) ($input["days_count{$n}"] ?? 0);
 
-            if (empty($start) || empty($input['date_end'])) {
-                Session::addMessageAfterRedirect(
-                    __('Informe a data de início e a quantidade de dias.', 'hrvacation'),
-                    false,
-                    ERROR
-                );
-                return false;
-            }
-        }
-
-        // Períodos 2 e 3 — só quando o formulário trouxe is_fracionado.
-        if (array_key_exists('is_fracionado', $input)) {
-            foreach ([2, 3] as $n) {
-                if (!empty($input['is_fracionado'])
-                    && !empty($input["date_start{$n}"])
-                    && !empty($input["days_count{$n}"])) {
-                    $input["date_end{$n}"] = self::calcDateEnd(
-                        $input["date_start{$n}"],
-                        $input["days_count{$n}"]
-                    );
-                } elseif (array_key_exists("date_start{$n}", $input)
-                       || array_key_exists("days_count{$n}", $input)) {
-                    $input["date_start{$n}"] = null;
-                    $input["days_count{$n}"] = 0;
-                    $input["date_end{$n}"]   = null;
-                }
+            if ($input['is_fracionado'] && !empty($s) && $d > 0) {
+                $input["date_start{$n}"] = $s;
+                $input["days_count{$n}"] = $d;
+                $input["date_end{$n}"]   = self::calcDateEnd($s, $d);
+            } else {
+                $input["date_start{$n}"] = null;
+                $input["days_count{$n}"] = 0;
+                $input["date_end{$n}"]   = null;
             }
         }
 
@@ -415,7 +420,7 @@ class Period extends CommonDBTM
         // ---- Comentários ----
         echo "<tr class='tab_bg_1'><td>" . __('Comentários') . "</td><td colspan='3'>";
         echo "<textarea class='form-control' name='comment' rows='3' style='width:100%;'>"
-            . Html::cleanInputText($this->fields['comment'] ?? '') . "</textarea>";
+            . Util::esc($this->fields['comment'] ?? '') . "</textarea>";
         echo "</td></tr>";
 
         // ---- Chamados período 1 ----
@@ -425,6 +430,12 @@ class Period extends CommonDBTM
         echo "<td>" . __('Chamado de liberação', 'hrvacation') . " (P1)</td>";
         echo "<td>" . self::getTicketLink($this->fields['unblock_ticket_id']) . "</td>";
         echo "</tr>";
+
+        // Marcador para distinguir submissão do formulário de updates parciais
+        // (ex.: o cron gravando apenas os IDs de chamado).
+        echo "<tr style='display:none;'><td colspan='4'>";
+        echo Html::hidden('_hrvac_form', ['value' => 1]);
+        echo "</td></tr>";
 
         $this->showFormButtons($options);
 
@@ -598,6 +609,26 @@ class Period extends CommonDBTM
     {
         $config = Config::getConfig();
         self::processDue($this->fields, $config);
+
+        // Se algum chamado foi aberto agora, aplica no Microsoft 365 na hora.
+        // Falhas aqui nunca impedem o cadastro: ficam registradas no chamado
+        // e são retentadas pela tarefa automática.
+        try {
+            Automation::runM365($config);
+        } catch (\Throwable $e) {
+            \Toolbox::logInFile('hrvacation', 'M365 (cadastro): ' . $e->getMessage() . "\n");
+        }
+        try {
+            Automation::runAd($config);
+        } catch (\Throwable $e) {
+            \Toolbox::logInFile('hrvacation', 'AD (cadastro): ' . $e->getMessage() . "\n");
+        }
+        try {
+            Automation::runAutoReply($config);
+        } catch (\Throwable $e) {
+            \Toolbox::logInFile('hrvacation', 'Resposta automática (cadastro): ' . $e->getMessage() . "\n");
+        }
+
         parent::post_addItem();
     }
 
@@ -635,6 +666,39 @@ class Period extends CommonDBTM
                 $task->log("ERRO no período {$row['id']}: " . $e->getMessage()
                     . " em " . $e->getFile() . ":" . $e->getLine());
             }
+        }
+
+        // Microsoft 365: executa pendências (novos chamados e retentativas).
+        try {
+            $n = Automation::runM365($config, $task);
+            if ($n > 0) {
+                $task->addVolume($n);
+                $count += $n;
+            }
+        } catch (\Throwable $e) {
+            $task->log('M365: ' . $e->getMessage());
+        }
+
+        // Active Directory: executa pendências (novos chamados e retentativas).
+        try {
+            $n = Automation::runAd($config, $task);
+            if ($n > 0) {
+                $task->addVolume($n);
+                $count += $n;
+            }
+        } catch (\Throwable $e) {
+            $task->log('AD: ' . $e->getMessage());
+        }
+
+        // Resposta automática de ausência (Microsoft 365).
+        try {
+            $n = Automation::runAutoReply($config, $task);
+            if ($n > 0) {
+                $task->addVolume($n);
+                $count += $n;
+            }
+        } catch (\Throwable $e) {
+            $task->log('Resposta automática: ' . $e->getMessage());
         }
 
         return $count > 0 ? 1 : 0;
@@ -875,6 +939,13 @@ class Period extends CommonDBTM
      */
     protected function cancelLinkedTickets()
     {
+        // Desliga a resposta automática, se já tiver sido configurada.
+        try {
+            Automation::onPeriodDeleted($this->fields);
+        } catch (\Throwable $e) {
+            \Toolbox::logInFile('hrvacation', 'Resposta automática (exclusão): ' . $e->getMessage() . "\n");
+        }
+
         $reason = __('Afastamento cancelado pelo RH', 'hrvacation');
         $fields = [
             'block_ticket_id', 'unblock_ticket_id',

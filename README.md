@@ -17,7 +17,7 @@ habilita a conta no **Active Directory** local (LDAPS) e no **Microsoft 365**
 (Entra ID), e agenda a **resposta automática de ausência** na caixa de correio.
 Tudo com simulação, limites de segurança e registro de cada ação no chamado.
 
-> Compatível com **GLPI 10.0.x** e **GLPI 11.0.x**.
+> Compatível com **GLPI 12.0.x**. Para GLPI 10 ou 11, use a versão 2.8.1 do plugin.
 
 ---
 
@@ -69,8 +69,8 @@ Tudo com simulação, limites de segurança e registro de cada ação no chamado
 
 | Item | Versão |
 |------|--------|
-| GLPI | 10.0.0+ ou 11.0.x |
-| PHP  | 7.4+, com as extensões `curl`, `ldap` e `openssl` (para a automação) |
+| GLPI | 12.0.0+ |
+| PHP  | 8.3+ (exigido pelo GLPI 12), com as extensões `curl`, `ldap` e `openssl` (para a automação) |
 
 A automação é opcional. Para usá-la: um app registrado no Entra ID (Microsoft
 365) e/ou uma conta de serviço no AD com LDAPS habilitado.
@@ -435,10 +435,11 @@ Tabelas: `glpi_plugin_hrvacation_periods`, `glpi_plugin_hrvacation_configs` e
 ## Notas técnicas
 
 - Segue convenções do GLPI: namespace `GlpiPlugin\Hrvacation` (PSR-4), tabelas `glpi_plugin_hrvacation_*`, sem chaves estrangeiras.
-- Consultas via **query builder** do GLPI; saída HTML escapada (compatível com GLPI 11).
+- Consultas via **query builder** do GLPI; saída HTML escapada por utilitário próprio (`Util::esc`), sem depender de funções removidas do núcleo.
 - A listagem usa **JOIN direto no banco** para garantir exibição do nome do colaborador em todas as interfaces.
 - Calendário e linha do tempo em PHP puro, sem dependências JS externas.
-- Camada `front/` mantida (suportada pelo GLPI 11 por compatibilidade).
+- Camada `front/` mantida (suportada pelo GLPI 12 por compatibilidade), sem carregar o `inc/includes.php` obsoleto quando o núcleo já está inicializado.
+- Propriedades herdadas do núcleo (`$rightname`, `$dohistory`) declaradas com tipo, como o GLPI 12 exige.
 - Direito do plugin injetado na sessão a cada requisição para funcionar na interface simplificada.
 - Segredos (client secret do Microsoft 365 e senha da conta de serviço do AD) gravados criptografados com a `GLPIKey`, fora do histórico e registrados em `secured_fields` para a rotação de chaves.
 - Toda a automação roda dentro do GLPI: não há endpoint público, worker externo nem token de API.
@@ -449,6 +450,7 @@ Tabelas: `glpi_plugin_hrvacation_periods`, `glpi_plugin_hrvacation_configs` e
 
 | Versão | Mudanças |
 |--------|----------|
+| 3.0.0 | Compatibilidade com o **GLPI 12**. Propriedades herdadas do núcleo declaradas com tipo (`public static string $rightname`, `public bool $dohistory`), o que no GLPI 12 era erro fatal do PHP e derrubava a sessão de todos os usuários. Substituição de `Html::cleanInputText()`, removido no GLPI 12, por utilitário próprio. Front-end deixa de carregar o `inc/includes.php` obsoleto. Trava que impede o plugin de registrar hooks em GLPI anterior ao 12. Requisito mínimo passa a ser GLPI 12.0.0 e PHP 8.3. |
 | 2.8.1 | Conta ou caixa inexistente no destino gera um único registro "sem ação", sem novas tentativas. Erros reais geram tarefa só na 1ª e na última tentativa; alerta de intervenção manual apenas após a última. Situações em português nas tarefas; registros sem informação útil ficam só no histórico interno. |
 | 2.8.0 | Regra da resposta automática editável na configuração: horário de início e de encerramento, fuso horário, quem recebe, comportamento no chamado de liberação e na exclusão, e se substitui uma resposta já configurada pelo colaborador. Resumo da regra exibido na tela com um exemplo de datas. |
 | 2.7.2 | Liberação não desliga mais a resposta automática antes do retorno: o agendamento a encerra no dia da volta; o plugin só desliga se a data de retorno já tiver passado. Exclusão do afastamento continua desligando na hora. |

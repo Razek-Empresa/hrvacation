@@ -7,14 +7,14 @@
  * datas, abre automaticamente um chamado para BLOQUEIO dos acessos no início
  * das férias e outro para LIBERAÇÃO dos acessos no retorno.
  *
- * Compatível com GLPI 10.0.x.
+ * Compatível com GLPI 12.0.x.
  */
 
 use GlpiPlugin\Hrvacation\Period;
 use GlpiPlugin\Hrvacation\Profile;
 
-define('PLUGIN_HRVACATION_VERSION', '2.8.1');
-define('PLUGIN_HRVACATION_MIN_GLPI', '10.0.0');
+define('PLUGIN_HRVACATION_VERSION', '3.0.0');
+define('PLUGIN_HRVACATION_MIN_GLPI', '12.0.0');
 
 /**
  * Inicialização do plugin: registra hooks, menus e direitos.
@@ -22,6 +22,14 @@ define('PLUGIN_HRVACATION_MIN_GLPI', '10.0.0');
 function plugin_init_hrvacation()
 {
     global $PLUGIN_HOOKS;
+
+    // Trava de segurança: esta versão usa propriedades tipadas, exigidas pelo
+    // GLPI 12 e incompatíveis com o GLPI 11 ou anterior. Em uma versão antiga,
+    // carregar as classes do plugin provocaria erro fatal do PHP e derrubaria a
+    // sessão de todos os usuários; por isso o plugin não registra nada.
+    if (!plugin_hrvacation_glpi_supported()) {
+        return;
+    }
 
     // Obrigatório para o GLPI aceitar os formulários do plugin.
     $PLUGIN_HOOKS['csrf_compliant']['hrvacation'] = true;
@@ -75,6 +83,19 @@ function plugin_init_hrvacation()
 }
 
 /**
+ * Indica se a versão do GLPI em execução é suportada por esta versão do plugin.
+ *
+ * @return boolean
+ */
+function plugin_hrvacation_glpi_supported()
+{
+    if (!defined('GLPI_VERSION')) {
+        return false;
+    }
+    return version_compare(GLPI_VERSION, PLUGIN_HRVACATION_MIN_GLPI, '>=');
+}
+
+/**
  * Metadados e requisitos do plugin.
  *
  * @return array
@@ -92,7 +113,7 @@ function plugin_version_hrvacation()
                 'min' => PLUGIN_HRVACATION_MIN_GLPI,
             ],
             'php' => [
-                'min' => '7.4',
+                'min' => '8.3',
             ],
         ],
     ];
@@ -105,6 +126,13 @@ function plugin_version_hrvacation()
  */
 function plugin_hrvacation_check_prerequisites()
 {
+    if (!plugin_hrvacation_glpi_supported()) {
+        echo sprintf(
+            __('Este plugin requer o GLPI %s ou superior.', 'hrvacation'),
+            PLUGIN_HRVACATION_MIN_GLPI
+        );
+        return false;
+    }
     return true;
 }
 

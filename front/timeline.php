@@ -1,9 +1,10 @@
 <?php
 
-if (defined('GLPI_ROOT')) {
-    include(GLPI_ROOT . '/inc/includes.php');
-} else {
-    include('../../../inc/includes.php');
+// A partir do GLPI 11 o núcleo já está carregado quando este arquivo é
+// executado, e inc/includes.php apenas registra um aviso de obsolescência.
+// Só carregamos o bootstrap legado se o GLPI realmente não estiver inicializado.
+if (!class_exists('Session')) {
+    include(defined('GLPI_ROOT') ? GLPI_ROOT . '/inc/includes.php' : '../../../inc/includes.php');
 }
 
 use GlpiPlugin\Hrvacation\Period;
